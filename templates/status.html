@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Status - LLM Manager</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0; background-color: #f4f7f6; display: grid;
+            place-items: center; min-height: 100vh;
+        }
+        .container {
+            width: 90%; max-width: 800px; background: #ffffff;
+            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.07);
+            padding: 2.5rem; margin: 2rem 0;
+        }
+        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 1.5rem; }
+        .card { background: #ecf0f1; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .nav-link {
+            display: inline-block;
+            background: #ecf0f1;
+            color: #34495e;
+            padding: 10px 15px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            transition: background-color 0.2s;
+        }
+        .nav-link:hover { background: #dfe6e9; }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        .metric-box {
+            background: #fff;
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid #dfe6e9;
+            text-align: center;
+        }
+        .metric-box-label {
+            font-size: 0.9em;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .metric-box-value {
+            font-size: 2em;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        .card a {
+            color: #3498db;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .card a:hover {
+            text-decoration: underline;
+        }
+        .model-status-separator {
+            border-bottom: 2px solid #ecf0f1;
+            margin: 2rem 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
+
+        {% if contexts %}
+
+            {% for port, context in contexts.items() %}
+
+            <div class="model-status-card">
+                <h1>Server Status: {{ context['name'] }}</h1>
+
+                <div class="card">
+                    <h2>Server Info</h2>
+                    <p><strong>Model:</strong> {{ context['name'] }}</p>
+                    <p><strong>Endpoint:</strong>
+                        <code>
+                            <a href="http://127.0.0.1:{{ port }}" target="_blank">
+                                http://127.0.0.1:{{ port }}
+                            </a>
+                        </code>
+                    </p>
+                </div>
+
+                <div class="card">
+                    <h2>Live Metrics (All Requests)</h2>
+                    <div class="metric-grid">
+                        <div class="metric-box">
+                            <div class="metric-box-label">Tokens/Second (Last Req)</div>
+                            <div class="metric-box-value" id="tps-display-{{ port }}">0.00</div>
+                        </div>
+                        <div class="metric-box">
+                            <div class="metric-box-label">Total Requests (Since Load)</div>
+                            <div class="metric-box-value" id="req-count-display-{{ port }}">0</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {% if not loop.last %}
+                <div class="model-status-separator"></div>
+            {% endif %}
+
+            {% endfor %}
+
+        {% else %}
+            <h1>Server Status</h1>
+            <p>No model is currently loaded. Go back to the <a href="/">main page</a> to load one.</p>
+        {% endif %}
+        </div>
+
+    {% if contexts %}
+    <script>
+        // Define the fetch function ONCE
+        async function fetchMetrics(port) {
+            // Get elements based on unique port
+            const tpsDisplay = document.getElementById('tps-display-' + port);
+            const reqCountDisplay = document.getElementById('req-count-display-' + port);
+            const metricsUrl = '/api/metrics?port=' + port;
+
+            if (!tpsDisplay || !reqCountDisplay) {
+                // Stop trying if elements don't exist
+                return;
+            }
+
+            try {
+                const response = await fetch(metricsUrl);
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                const metrics = await response.json();
+
+                // Update the UI
+                tpsDisplay.textContent = metrics.last_tps.toFixed(2);
+                reqCountDisplay.textContent = metrics.total_requests;
+
+            } catch (error) {
+                // console.error('Error fetching metrics:', error);
+                tpsDisplay.textContent = 'Error';
+                reqCountDisplay.textContent = 'Error';
+            }
+        }
+
+        // Loop through the ports from Flask and start the fetchers
+        {% for port in contexts.keys() %}
+            fetchMetrics({{ port }});
+            setInterval(() => fetchMetrics({{ port }}), 2000);
+        {% endfor %}
+
+    </script>
+    {% endif %}
+    </body>
+</html>

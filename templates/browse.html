@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browse Local Cache - LLM Manager</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0; background-color: #f4f7f6; display: grid;
+            place-items: center; min-height: 100vh;
+        }
+        .container {
+            width: 90%; max-width: 1000px; background: #ffffff;
+            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.07);
+            padding: 2.5rem; margin: 2rem 0;
+        }
+        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
+        button, .button {
+            background-color: #3498db; color: white; padding: 12px 20px;
+            border: none; border-radius: 6px; cursor: pointer; font-size: 16px;
+            transition: background-color 0.2s; text-decoration: none; display: inline-block;
+        }
+        button:hover, .button:hover { background-color: #2980b9; }
+        .button-small { padding: 6px 12px; font-size: 14px; }
+        .button-secondary { background-color: #2ecc71; }
+        .button-secondary:hover { background-color: #27ae60; }
+
+        .flash {
+            padding: 1rem; margin-bottom: 1rem; border-radius: 6px;
+            font-weight: 600;
+        }
+        .flash.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+
+        .nav-link {
+            display: inline-block;
+            background: #ecf0f1;
+            color: #34495e;
+            padding: 10px 15px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            transition: background-color 0.2s;
+        }
+        .nav-link:hover { background: #dfe6e9; }
+
+        .search-bar { display: flex; gap: 10px; margin-bottom: 1.5rem; }
+        input[type="text"] {
+            flex-grow: 1; padding: 12px; border: 1px solid #bdc3c7;
+            border-radius: 6px; box-sizing: border-box;
+        }
+
+        .table-container {
+            width: 100%;
+            overflow-x: auto;
+            border: 1px solid #ecf0f1;
+            border-radius: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ecf0f1;
+            white-space: nowrap;
+        }
+        th { background-color: #f9fafb; color: #555; font-size: 14px; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background-color: #fdfdfd; }
+        .col-repo { min-width: 250px; }
+        .col-file { min-width: 300px; }
+        .col-quant { width: 120px; }
+        .col-action { width: 120px; text-align: center; }
+        /* Basic Modal Styling */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto; /* 15% from the top and centered */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%; /* Could be more or less, depending on screen size */
+            max-width: 400px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 1.2em;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
+         <a href="/search_hf" class="nav-link">Search Hugging Face &raquo;</a>
+        <h1>Browse Local GGUF Model Cache</h1>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <div class="search-bar">
+            <form action="/refresh_cache" method="POST" style="margin:0;" id="refreshCacheForm">
+                <button type="submit" class="button-secondary">Refresh Cache (Top 500 Repos)</button>
+            </form>
+            <form action="/browse" method="GET" style="margin:0; display:flex; flex-grow:1;">
+                <input type="text" name="q" placeholder="Search by repo, filename, or quantization..." value="{{ search_query }}">
+                <button type="submit" style="margin-left:10px;">Search</button>
+            </form>
+        </div>
+
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-repo">Repo ID</th>
+                        <th class="col-file">Filename</th>
+                        <th class="col-quant">Quantization</th>
+                        <th class="col-action">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for model in models %}
+                    <tr>
+                        <td>{{ model['repo_id'] }}</td>
+                        <td>{{ model['filename'] }}</td>
+                        <td>{{ model['quantization'] }}</td>
+                        <td class="col-action">
+                            <form action="/download" method="POST" class="download-form" style="margin:0;">
+                                <input type="hidden" name="repo_id" value="{{ model['repo_id'] }}">
+                                <input type="hidden" name="filename" value="{{ model['filename'] }}">
+                                <button type="submit" class="button-small">Download</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" style="text-align:center; padding: 2rem; color: #777;">
+                            No models found in cache. Try refreshing!
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <!-- The Modal -->
+    <div id="loadingModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <p id="modalMessage">Downloading model... Please wait.</p>
+        </div>
+    </div>
+
+     <script>
+        // Get the modal
+        var modal = document.getElementById("loadingModal");
+        var modalMessage = document.getElementById("modalMessage");
+
+        // Get the <span> element that closes the modal
+        var span = document.getElementsByClassName("close")[0];
+
+        // Get all download forms
+        var downloadForms = document.querySelectorAll(".download-form");
+        var refreshCacheForm = document.getElementById("refreshCacheForm");
+
+        // When the user clicks on a download button, open the modal
+        downloadForms.forEach(function(form) {
+            form.addEventListener("submit", function(event) {
+                modalMessage.textContent = "Downloading model... Please wait.";
+                modal.style.display = "block";
+            });
+        });
+
+        // When the user clicks on the refresh cache button, open the modal
+        if (refreshCacheForm) {
+             refreshCacheForm.addEventListener("submit", function(event) {
+                modalMessage.textContent = "Refreshing model cache... This may take a few minutes.";
+                modal.style.display = "block";
+            });
+        }
+
+
+        // When the user clicks on <span> (x), close the modal
+        span.onclick = function() {
+            modal.style.display = "none";
+        }
+
+        // When the user clicks anywhere outside of the modal, close it
+        window.onclick = function(event) {
+            if (event.target == modal) {
+                modal.style.display = "none";
+            }
+        }
+    </script>
+</body>
+</html>

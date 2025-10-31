@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local LLM Manager </title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; padding: 0; background-color: #f4f7f6; display: grid;
+            place-items: center; min-height: 100vh;
+        }
+        .container {
+            width: 90%; max-width: 800px; background: #ffffff;
+            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.07);
+            padding: 2.5rem; margin: 2rem 0;
+        }
+        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 1.5rem; }
+        .card { background: #ecf0f1; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; color: #555; }
+        input[type="text"], select, textarea {
+            width: 100%; padding: 12px; border: 1px solid #bdc3c7;
+            border-radius: 6px; box-sizing: border-box; margin-bottom: 1rem;
+        }
+        textarea { min-height: 120px; resize: vertical; }
+        button {
+            background-color: #3498db; color: white; padding: 12px 20px;
+            border: none; border-radius: 6px; cursor: pointer; font-size: 16px;
+            transition: background-color 0.2s;
+        }
+        button:hover { background-color: #2980b9; }
+        .status-bar {
+            background: #2c3e50; color: white; padding: 1rem;
+            border-radius: 6px; margin-bottom: 1.5rem;=
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #34495e;
+        }
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        .status-bar small { color: #bdc3c7; }
+        .button-small {
+            padding: 6px 12px;
+            font-size: 14px;
+        }
+        .button-unload {
+            background-color: #e67e22;
+        }
+        .button-unload:hover {
+            background-color: #d35400;
+        }
+        .output {
+            background: #fafafa; border: 1px solid #eee; border-radius: 6px;
+            padding: 1.5rem; min-height: 100px; white-space: pre-wrap;
+            word-wrap: break-word; font-family: "Courier New", Courier, monospace;
+        }
+        .flash {
+            padding: 1rem; margin-bottom: 1rem; border-radius: 6px;
+            font-weight: 600;
+        }
+        .flash.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .nav-link {
+            display: inline-block;
+            background: #ecf0f1;
+            color: #34495e;
+            padding: 10px 15px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            transition: background-color 0.2s;
+        }
+        .nav-link:hover { background: #dfe6e9; }
+        /* Basic Modal Styling */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed; /* Stay in place */
+            z-index: 1; /* Sit on top */
+            left: 0;
+            top: 0;
+            width: 100%; /* Full width */
+            height: 100%; /* Full height */
+            overflow: auto; /* Enable scroll if needed */
+            background-color: rgba(0,0,0,0.4); /* Black w/ opacity */
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto; /* 15% from the top and centered */
+            padding: 20px;
+            border: 1px solid #888;
+            width: 90%; /* Could be more or less, depending on screen size */
+            border-radius: 10px;
+            text-align: center;
+            font-size: 1.2em;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        /* --- Style for the help modal content --- */
+        #helpModal .modal-content {
+            width: 90%;            /* Use 90% of the browser width */
+            max-width: 1200px;     /* Set a reasonable max width */
+            margin: 5% auto;       /* Reduce top margin */
+            text-align: left;
+        }
+        #helpModalContent {
+            background: #f4f4f4;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+            max-height: 60vh; /* Limit height and allow scroll */
+            overflow-y: auto;
+            white-space: pre-wrap; /* Preserve formatting */
+            word-wrap: break-word;
+            text-align: left; /* Align help text left */
+            font-family: "Courier New", Courier, monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Local LLM Manager</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <div class_name="card">
+            <h2>OpenAI API Proxy</h2>
+            {% if proxy_host != 'N/A' %}
+                <p>Proxy is running and accessible at:</p>
+                <p><strong>API Base:</strong> <code>http://{{ display_host }}:{{ proxy_port }}/v1</code></p>
+                <p><strong>API Key:</strong> (Use any non-empty string)</p>
+            {% else %}
+                <p>Proxy server is not configured or failed to start.</p>
+            {% endif %}
+        </div>
+
+        <h2>Loaded Models</h2>
+        <div class="status-bar">
+            {% if contexts %}
+                {% for port, context in contexts.items() %}
+                <div class="status-item">
+                    <div>
+                        <strong>{{ context.name }}</strong>
+                        <br><small>(Running on: 127.0.0.1:{{ port }})</small>
+                    </div>
+                    <form action="/unload" method="POST" style="margin: 0;">
+                        <input type="hidden" name="port" value="{{ port }}">
+                        <button type="submit" class="button-small button-unload">Unload</button>
+                    </form>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="text-align: center; margin: 0; padding: 10px 0;">No models are currently loaded.</p>
+            {% endif %}
+        </div>
+
+        <a href="/browse" class="nav-link">Browse Local Cache &raquo;</a>
+        <a href="/search_hf" class="nav-link">Search Hugging Face &raquo;</a>
+        <a href="/status" class="nav-link">Server Status &raquo;</a>
+
+
+        <div class="card">
+            <h2>1. Download Model</h2>
+            <form action="/download" method="POST" class="download-form">
+                <label for="repo_id">Hugging Face Repo ID:</label>
+                <input type="text" id="repo_id" name="repo_id" placeholder="e.g., TheBloke/Llama-3-8B-Instruct-GGUF">
+                <label for="filename">GGUF Filename:</label>
+                <input type="text" id="filename" name="filename" placeholder="e.g., llama-3-8b-instruct.Q4_K_M.gguf">
+                <button type="submit">Download</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>2. Load Model</h2>
+            <form action="/load" method="POST">
+                <label for="model_file">Select a downloaded model:</label>
+                <select id="model_file" name="model_file">
+                    {% for model in models %}
+                        <option value="{{ model }}">{{ model }}</option>
+                    {% else %}
+                        <option value="" disabled>No models found in 'models' folder</option>
+                    {% endfor %}
+                </select>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
+                    <label for="custom_args" style="margin-bottom: 0;">Custom llama-server arguments:</label>
+                    <button type="button" id="showHelpBtn" class="button-small" style="background-color: #7f8c8d; border: none;">Show Help</button>
+                </div>
+                <input type="text" id="custom_args" name="custom_args" placeholder="e.g., --temp 0.7 --top-k 40">
+                <button type="submit">Load Model</button>
+            </form>
+        </div>
+
+    </div>
+
+    <div id="loadingModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <p>Downloading model... Please wait.</p>
+        </div>
+    </div>
+
+    <div id="helpModal" class="modal">
+        <div class="modal-content" style="text-align: left;">
+            <span class="close-help">&times;</span>
+            <h2>llama-server Help</h2>
+            <pre id="helpModalContent">Loading...</pre>
+        </div>
+    </div>
+    <script>
+        const allArgs = {{ all_custom_args_json | safe }};
+        const modelSelect = document.getElementById('model_file');
+        const customArgsInput = document.getElementById('custom_args');
+
+        function updateCustomArgs() {
+            if (!modelSelect) return; // Guard against no models
+            const selectedModel = modelSelect.value;
+            if (allArgs.hasOwnProperty(selectedModel)) {
+                customArgsInput.value = allArgs[selectedModel];
+            } else {
+                customArgsInput.value = ''; // Clear it if no args are saved
+            }
+        }
+        if (modelSelect) {
+            modelSelect.addEventListener('change', updateCustomArgs);
+
+            // 5. Run on page load for the default selected model
+            updateCustomArgs();
+        }
+
+        // Get the modals
+        var loadingModal = document.getElementById("loadingModal");
+        var helpModal = document.getElementById("helpModal");
+
+        // Get the <span> elements that close the modals
+        var loadingSpan = document.getElementsByClassName("close")[0];
+        var helpSpan = document.getElementsByClassName("close-help")[0];
+
+        // --- Download/Loading Modal Logic ---
+        var downloadForms = document.querySelectorAll(".download-form");
+        // When the user clicks on a download button, open the modal
+        downloadForms.forEach(function(form) {
+            form.addEventListener("submit", function(event) {
+                loadingModal.style.display = "block";
+            });
+        });
+        // When the user clicks on <span> (x), close the loading modal
+        loadingSpan.onclick = function() {
+            loadingModal.style.display = "none";
+        }
+
+        // --- Help Modal Logic ---
+        var showHelpBtn = document.getElementById("showHelpBtn");
+        var helpModalContent = document.getElementById("helpModalContent");
+
+        if (showHelpBtn) {
+            showHelpBtn.onclick = function() {
+                helpModalContent.textContent = "Loading help output from 'llama-server --help'...";
+                helpModal.style.display = "block";
+
+                // Fetch the help content from the API
+                fetch('/api/llama_help')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! Status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        helpModalContent.textContent = data.help_text; // Populate the modal
+                    })
+                    .catch(error => {
+                        console.error('Error fetching llama-server help:', error);
+                        helpModalContent.textContent = 'Failed to load help content. Check server logs for details. Is llama-server in your PATH?';
+                    });
+            }
+        }
+
+        // When the user clicks on <span> (x) for the help modal
+        if (helpSpan) {
+            helpSpan.onclick = function() {
+                helpModal.style.display = "none";
+            }
+        }
+
+        // When the user clicks anywhere outside of *either* modal, close it
+        window.onclick = function(event) {
+            if (event.target == loadingModal) {
+                loadingModal.style.display = "none";
+            }
+            if (event.target == helpModal) {
+                helpModal.style.display = "none";
+            }
+        }
+    </script>
+    </body>
+</html>
