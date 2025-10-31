@@ -1,4 +1,6 @@
+python-dotenv
 flask
+flask_cors
 requests
 llama-cpp-python
 llama-cpp-python[server]
