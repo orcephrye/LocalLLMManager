@@ -10,13 +10,12 @@ import sys
 import shlex
 import json
 import socket
-import uuid
 import requests
 import traceback
 import time
 from time import sleep
 from dotenv import load_dotenv
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, flash, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
 from flask_cors import CORS
 from huggingface_hub import hf_hub_download, HfApi
 
