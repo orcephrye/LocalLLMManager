@@ -1,7 +1,8 @@
 [project]
 name = "LocalLLMManager"
-dynamic = ["version"]
-description = ''
+version = "2025.11.1.0001"
+dynamic = ["dependencies"]
+description = 'Yet Another Local LLM Manager tool using llama.cpp'
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -15,13 +16,16 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
 ]
-dependencies = []
 
 [project.urls]
 Documentation = "https://github.com/orcephrye/LocalLLMManager#readme"
 Issues = "https://github.com/orcephrye/LocalLLMManager/issues"
 Source = "https://github.com/orcephrye/LocalLLMManager"
 
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+version = {file = ["__init__.py"]}
 
 [tool.ruff]
 # Enable pycodestyle (`E`) and Pyflakes (`F`) codes by default.
