@@ -773,7 +773,7 @@ def proxy_chat_completions():
 
 
 def check_default_env():
-    env_path = os.path.join(os.path.dirname(APP_DIR), '.env')
+    env_path = os.path.join(os.path.abspath(APP_DIR), '.env')
 
     if not os.path.exists(env_path):
         default_env_content = (
