@@ -23,6 +23,13 @@ Issues = "https://github.com/orcephrye/LocalLLMManager/issues"
 Source = "https://github.com/orcephrye/LocalLLMManager"
 
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["LocalLLMManager"]
+
+[tool.setuptools.package-data]
+"LocalLLMManager" = ["templates/*.html"]
+
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
