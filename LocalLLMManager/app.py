@@ -22,12 +22,11 @@ from huggingface_hub import hf_hub_download, HfApi
 # --- Configuration ---
 logger = logging.getLogger(__name__)
 
+APP_DIR = os.path.dirname(__file__)
 # Set the folder where models will be stored
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 # Set the path for the local model database
 DATABASE_FILE = os.path.join(os.path.dirname(__file__), "models.db")
-# Create the directory if it doesn't exist
-os.makedirs(MODEL_DIR, exist_ok=True)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -781,6 +780,7 @@ if __name__ == '__main__':
     default_verbose = os.environ.get('APP_VERBOSE', 'false').lower() in ('true', '1', 'yes')
     default_proxy_host = os.environ.get('PROXY_HOST', '0.0.0.0')
     default_proxy_port = int(os.environ.get('PROXY_PORT', 8080))
+    default_model_dir = os.environ.get('MODEL_DIR', os.path.join(APP_DIR, "models"))
 
     # --- Argument Parsing ---
     parser = argparse.ArgumentParser(description="Run the LLM Manager Flask app.")
@@ -821,7 +821,18 @@ if __name__ == '__main__':
         '--proxy-port', type=int, default=default_proxy_port,
         help=f"The port for the OpenAI Proxy. (Env: PROXY_PORT, Default: {default_proxy_port})"
     )
+    parser.add_argument(
+        '--model-dir',
+        type=str,
+        default=default_model_dir,
+        help=f"Directory to store models. (Env: MODEL_DIR, Default: {default_model_dir})"
+    )
     args = parser.parse_args()
+
+    MODEL_DIR = os.path.abspath(args.model_dir)
+
+    # Create the directory if it doesn't exist
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
     if args.model_dir_path:
         print(os.path.abspath(MODEL_DIR))
