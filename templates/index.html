@@ -246,8 +246,6 @@
         }
         if (modelSelect) {
             modelSelect.addEventListener('change', updateCustomArgs);
-
-            // 5. Run on page load for the default selected model
             updateCustomArgs();
         }
 
@@ -267,6 +265,7 @@
                 loadingModal.style.display = "block";
             });
         });
+
         // When the user clicks on <span> (x), close the loading modal
         loadingSpan.onclick = function() {
             loadingModal.style.display = "none";
@@ -290,7 +289,7 @@
                         return response.json();
                     })
                     .then(data => {
-                        helpModalContent.textContent = data.help_text; // Populate the modal
+                        helpModalContent.textContent = data.help_text;
                     })
                     .catch(error => {
                         console.error('Error fetching llama-server help:', error);

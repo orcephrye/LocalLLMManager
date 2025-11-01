@@ -71,7 +71,7 @@
             tr:hover { background-color: #fdfdfd; }
             .col-repo { min-width: 250px; }
             .col-action { width: 250px; text-align: center; } /* Increased width for two buttons */
-             /* Basic Modal Styling */
+
             .modal {
                 display: none; /* Hidden by default */
                 position: fixed; /* Stay in place */
@@ -114,7 +114,6 @@
              <a href="/browse" class="nav-link">Browse Local Cache &raquo;</a>
             <h1>Search Hugging Face for GGUF Models (llama.cpp)</h1>
 
-            <!-- Flash Messages -->
             {% with messages = get_flashed_messages(with_categories=true) %}
               {% if messages %}
                 {% for category, message in messages %}
@@ -173,7 +172,6 @@
 
         </div>
 
-        <!-- The Modal -->
         <div id="loadingModal" class="modal">
             <div class="modal-content">
                 <span class="close">&times;</span>
