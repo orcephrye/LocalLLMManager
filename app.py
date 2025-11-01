@@ -842,7 +842,6 @@ if __name__ == '__main__':
     app.config['PROXY_PORT'] = args.proxy_port
     def run_proxy_server():
         try:
-            # Note: We don't use proxy_app.run(debug=True) as it conflicts with threading
             logger.info(f"Starting OpenAI proxy server on http://{args.proxy_host}:{args.proxy_port}")
             proxy_app.run(host=args.proxy_host, port=args.proxy_port)
         except Exception as e:
