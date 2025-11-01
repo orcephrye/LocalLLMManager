@@ -772,7 +772,45 @@ def proxy_chat_completions():
         return jsonify({"error": f"An internal error occurred: {e}"}), 500
 
 
+def check_default_env():
+    env_path = os.path.join(os.path.dirname(APP_DIR), '.env')
+
+    if not os.path.exists(env_path):
+        default_env_content = (
+            "# --- LocalLLMManager Environment Variables ---\n\n"
+            "# Host for the main web application\n"
+            "# Default: 0.0.0.0 (listens on all available network interfaces)\n"
+            "APP_HOST=0.0.0.0\n\n"
+            "# Port for the main web application\n"
+            "# Default: 5001\n"
+            "APP_PORT=5001\n\n"
+            "# Enable/disable Flask debug mode\n"
+            "# Default: false\n"
+            "APP_DEBUG=false\n\n"
+            "# Enable/disable verbose (DEBUG level) logging\n"
+            "# Default: false\n"
+            "APP_VERBOSE=false\n\n"
+            "# Host for the OpenAI-compatible proxy server\n"
+            "# Default: 0.0.0.0\n"
+            "PROXY_HOST=0.0.0.0\n\n"
+            "# Port for the OpenAI-compatible proxy server\n"
+            "# Default: 8080\n"
+            "PROXY_PORT=8080\n\n"
+            "# Directory to store downloaded GGUF models\n"
+            "# Default: (path to LocalLLMManager/models)\n"
+            "# You can override this with an absolute path if you like:\n"
+            "# MODEL_DIR=\n"
+        )
+        try:
+            with open(env_path, 'w') as f:
+                f.write(default_env_content)
+            print(f"INFO: No .env file found. Created a default .env file at {env_path}")
+        except Exception as e:
+            print(f"WARNING: Failed to create default .env file at {env_path}: {e}")
+
+
 if __name__ == '__main__':
+    check_default_env()
     load_dotenv()
     default_host = os.environ.get('APP_HOST', '0.0.0.0')
     default_port = int(os.environ.get('APP_PORT', 5001))
@@ -809,9 +847,14 @@ if __name__ == '__main__':
         help="Enable verbose logging (DEBUG level). (Default: INFO level)"
     )
     parser.add_argument(
-        '--model-dir-path',
+        '--print-model-dir-path',
         action='store_true',
         help="Print the absolute path to the model storage directory and exit."
+    )
+    parser.add_argument(
+        '--print-app-path',
+        action='store_true',
+        help="Print the absolute path to the app directory and exit."
     )
     parser.add_argument(
         '--proxy-host', type=str, default=default_proxy_host,
@@ -834,8 +877,12 @@ if __name__ == '__main__':
     # Create the directory if it doesn't exist
     os.makedirs(MODEL_DIR, exist_ok=True)
 
-    if args.model_dir_path:
+    if args.print_model_dir_path:
         print(os.path.abspath(MODEL_DIR))
+        sys.exit(0)
+
+    if args.print_app_path:
+        print(os.path.abspath(APP_DIR))
         sys.exit(0)
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
