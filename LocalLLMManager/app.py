@@ -44,6 +44,9 @@ llm_server_contexts = {}
 STARTING_PORT = 8100
 
 
+MULTI_PART_REGEX = re.compile(r"\d{5}-of-\d{5}.gguf$")
+
+
 def parse_logs(log_line, metrics):
     lines = log_line.strip().split()
     try:
@@ -311,6 +314,10 @@ def get_local_models():
     models = []
     for filename in os.listdir(MODEL_DIR):
         if filename.endswith(".gguf"):
+            if MULTI_PART_REGEX.findall(filename):
+                if '00001-of-' in filename:
+                    models.append(filename)
+                continue
             models.append(filename)
     return models
 
