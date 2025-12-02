@@ -151,7 +151,7 @@ def run_estimator(gguf_file: str, context_sizes: List[int], overhead_gib: float)
             mem_swa = min(n_ctx, swa_window_size) * n_layers_swa * bytes_per_token_per_layer
             kv_cache_bytes = mem_full + mem_swa
             total_bytes = model_size_bytes + kv_cache_bytes + overhead_bytes
-            output[n_ctx] = format_mem(total_bytes).strip()
+            output[str(n_ctx)] = format_mem(total_bytes).strip()
 
         return output
 

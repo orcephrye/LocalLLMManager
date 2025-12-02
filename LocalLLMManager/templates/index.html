@@ -205,6 +205,13 @@
                     {% endfor %}
                 </select>
 
+                <div id="vram-info" style="background: #ffffff; padding: 10px; border-radius: 4px; margin-bottom: 1rem; border: 1px solid #dfe6e9; display: none;">
+                    <div style="display: flex; gap: 20px;">
+                        <div><strong>Training Context:</strong> <span id="info-train-ctx">Loading...</span></div>
+                        <div><strong>Est. VRAM (16k ctx):</strong> <span id="info-vram-16k">Loading...</span></div>
+                    </div>
+                </div>
+
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
                     <label for="custom_args" style="margin-bottom: 0;">Custom llama-server arguments:</label>
                     <button type="button" id="showHelpBtn" class="button-small" style="background-color: #7f8c8d; border: none;">Show Help</button>
@@ -235,6 +242,10 @@
         const modelSelect = document.getElementById('model_file');
         const customArgsInput = document.getElementById('custom_args');
 
+        const vramInfoDiv = document.getElementById('vram-info');
+        const infoTrainCtx = document.getElementById('info-train-ctx');
+        const infoVram16k = document.getElementById('info-vram-16k');
+
         function updateCustomArgs() {
             if (!modelSelect) return; // Guard against no models
             const selectedModel = modelSelect.value;
@@ -243,7 +254,43 @@
             } else {
                 customArgsInput.value = ''; // Clear it if no args are saved
             }
+
+            if (selectedModel) {
+                vramInfoDiv.style.display = 'block';
+                infoTrainCtx.textContent = '...';
+                infoVram16k.textContent = '...';
+
+                fetch(`/api/estimate_vram?filename=${encodeURIComponent(selectedModel)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.error) {
+                            infoTrainCtx.textContent = 'Error';
+                            infoVram16k.textContent = 'Error';
+                        } else {
+                            // Display Training Context
+                            infoTrainCtx.textContent = data.training_context ? data.training_context.toLocaleString() : 'Unknown';
+
+                            // Display 16k Estimate (Check if key exists, might be filtered if model context < 16k)
+                            if (data['16384']) {
+                                infoVram16k.textContent = data['16384'];
+                            } else {
+                                // Fallback if the model doesn't support 16k context naturally
+                                infoVram16k.textContent = 'N/A (Model ctx < 16k)';
+                            }
+                        }
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        infoTrainCtx.textContent = 'Error';
+                        infoVram16k.textContent = 'Error';
+                    });
+            } else {
+                vramInfoDiv.style.display = 'none';
+            }
         }
+
+
+
         if (modelSelect) {
             modelSelect.addEventListener('change', updateCustomArgs);
             updateCustomArgs();

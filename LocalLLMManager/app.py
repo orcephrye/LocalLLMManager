@@ -738,6 +738,27 @@ def api_llama_help():
         return jsonify({"help_text": f"An unknown error occurred: {e}"}), 500
 
 
+@app.route('/api/estimate_vram')
+def estimate_vram_route():
+    filename = request.args.get('filename')
+    if not filename:
+        return jsonify({"error": "No filename provided"}), 400
+
+    model_path = os.path.join(MODEL_DIR, filename)
+    if not os.path.exists(model_path):
+        return jsonify({"error": "Model file not found"}), 404
+
+    # Run estimator:
+    # We request 16384 context size.
+    try:
+        data = run_estimator(model_path, [16384], 2)
+        print(f"Estimated VRAM: {data}")
+        return jsonify(data)
+    except Exception as e:
+        logger.error(f"Error estimating VRAM: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @proxy_app.route('/v1/models', methods=['GET'])
 def proxy_models():
     """
