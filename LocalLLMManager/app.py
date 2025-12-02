@@ -13,6 +13,7 @@ import socket
 import requests
 import traceback
 import time
+import pathlib
 from time import sleep
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
@@ -21,6 +22,7 @@ from huggingface_hub import hf_hub_download, HfApi
 
 # --- Configuration ---
 logger = logging.getLogger(__name__)
+
 
 APP_DIR = os.path.dirname(__file__)
 # Set the folder where models will be stored
@@ -45,6 +47,52 @@ STARTING_PORT = 8100
 
 
 MULTI_PART_REGEX = re.compile(r"\d{5}-of-\d{5}.gguf$")
+
+
+def check_default_env():
+    env_path = os.path.join(os.path.abspath(APP_DIR), '.env')
+
+    if not os.path.exists(env_path):
+        default_env_content = (
+            "# --- LocalLLMManager Environment Variables ---\n\n"
+            "# Path to llama-server executable\n"
+            "# LLAMA_BIN_PATH=\n\n"
+            "# Host for the main web application\n"
+            "# Default: 0.0.0.0 (listens on all available network interfaces)\n"
+            "APP_HOST=0.0.0.0\n\n"
+            "# Port for the main web application\n"
+            "# Default: 5001\n"
+            "APP_PORT=5001\n\n"
+            "# Enable/disable Flask debug mode\n"
+            "# Default: false\n"
+            "APP_DEBUG=false\n\n"
+            "# Enable/disable verbose (DEBUG level) logging\n"
+            "# Default: false\n"
+            "APP_VERBOSE=false\n\n"
+            "# Host for the OpenAI-compatible proxy server\n"
+            "# Default: 0.0.0.0\n"
+            "PROXY_HOST=0.0.0.0\n\n"
+            "# Port for the OpenAI-compatible proxy server\n"
+            "# Default: 8080\n"
+            "PROXY_PORT=8080\n\n"
+            "# Directory to store downloaded GGUF models\n"
+            "# Default: (path to LocalLLMManager/models)\n"
+            "# You can override this with an absolute path if you like:\n"
+            "# MODEL_DIR=\n"
+        )
+        try:
+            with open(env_path, 'w') as f:
+                f.write(default_env_content)
+            print(f"INFO: No .env file found. Created a default .env file at {env_path}")
+        except Exception as e:
+            print(f"WARNING: Failed to create default .env file at {env_path}: {e}")
+
+
+check_default_env()
+load_dotenv()
+
+LLAMA_BIN_PATH = os.getenv("LLAMA_BIN_PATH", "")
+LLAMA_SERVER_CMD = str(pathlib.Path(LLAMA_BIN_PATH).joinpath('llama-server'))
 
 
 def parse_logs(log_line, metrics):
@@ -495,7 +543,7 @@ def load_model():
     try:
         port = find_next_available_port(STARTING_PORT)
         command = [
-            "llama-server",
+            LLAMA_SERVER_CMD,
             "-m", model_path,
             "--port", str(port)
         ]
@@ -665,7 +713,7 @@ def api_llama_help():
     """Runs 'llama-server --help' and returns the output."""
     try:
         result = subprocess.run(
-            ["llama-server", "--help"],
+            [LLAMA_SERVER_CMD, "--help"],
             capture_output=True,
             text=True,
             timeout=5
@@ -779,46 +827,7 @@ def proxy_chat_completions():
         return jsonify({"error": f"An internal error occurred: {e}"}), 500
 
 
-def check_default_env():
-    env_path = os.path.join(os.path.abspath(APP_DIR), '.env')
-
-    if not os.path.exists(env_path):
-        default_env_content = (
-            "# --- LocalLLMManager Environment Variables ---\n\n"
-            "# Host for the main web application\n"
-            "# Default: 0.0.0.0 (listens on all available network interfaces)\n"
-            "APP_HOST=0.0.0.0\n\n"
-            "# Port for the main web application\n"
-            "# Default: 5001\n"
-            "APP_PORT=5001\n\n"
-            "# Enable/disable Flask debug mode\n"
-            "# Default: false\n"
-            "APP_DEBUG=false\n\n"
-            "# Enable/disable verbose (DEBUG level) logging\n"
-            "# Default: false\n"
-            "APP_VERBOSE=false\n\n"
-            "# Host for the OpenAI-compatible proxy server\n"
-            "# Default: 0.0.0.0\n"
-            "PROXY_HOST=0.0.0.0\n\n"
-            "# Port for the OpenAI-compatible proxy server\n"
-            "# Default: 8080\n"
-            "PROXY_PORT=8080\n\n"
-            "# Directory to store downloaded GGUF models\n"
-            "# Default: (path to LocalLLMManager/models)\n"
-            "# You can override this with an absolute path if you like:\n"
-            "# MODEL_DIR=\n"
-        )
-        try:
-            with open(env_path, 'w') as f:
-                f.write(default_env_content)
-            print(f"INFO: No .env file found. Created a default .env file at {env_path}")
-        except Exception as e:
-            print(f"WARNING: Failed to create default .env file at {env_path}: {e}")
-
-
 if __name__ == '__main__':
-    check_default_env()
-    load_dotenv()
     default_host = os.environ.get('APP_HOST', '0.0.0.0')
     default_port = int(os.environ.get('APP_PORT', 5001))
     default_debug = os.environ.get('APP_DEBUG', 'false').lower() in ('true', '1', 'yes')
