@@ -216,7 +216,7 @@ def update_model_database():
 
     try:
         fetch_failure_count = 0
-        models = api.list_models(filter="gguf", apps="llama.cpp", sort="downloads", direction=-1, limit=500)
+        models = api.list_models(filter="gguf", apps="llama.cpp", sort="downloads", limit=500)
 
         for model in models:
             repo_id = getattr(model, 'modelId', '')
@@ -335,7 +335,6 @@ def search_huggingface(query):
             filter="gguf",
             apps="llama.cpp",
             sort="downloads",
-            direction=-1,
             limit=200
         )
         return models
@@ -478,8 +477,7 @@ def download_model():
         hf_hub_download(
             repo_id=repo_id,
             filename=filename,
-            local_dir=MODEL_DIR,
-            local_dir_use_symlinks=False  # Good for Windows compatibility
+            local_dir=MODEL_DIR
         )
         logger.info("Download complete.")
         flash(f"Successfully downloaded {filename}!", "success")
