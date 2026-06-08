@@ -4,71 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Server Status - LLM Manager</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0; padding: 0; background-color: #f4f7f6; display: grid;
-            place-items: center; min-height: 100vh;
-        }
-        .container {
-            width: 90%; max-width: 800px; background: #ffffff;
-            border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.07);
-            padding: 2.5rem; margin: 2rem 0;
-        }
-        h1 { color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
-        h2 { color: #34495e; margin-top: 1.5rem; }
-        .card { background: #ecf0f1; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
-        .nav-link {
-            display: inline-block;
-            background: #ecf0f1;
-            color: #34495e;
-            padding: 10px 15px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-            transition: background-color 0.2s;
-        }
-        .nav-link:hover { background: #dfe6e9; }
-
-        .metric-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-        }
-        .metric-box {
-            background: #fff;
-            padding: 1rem;
-            border-radius: 8px;
-            border: 1px solid #dfe6e9;
-            text-align: center;
-        }
-        .metric-box-label {
-            font-size: 0.9em;
-            color: #555;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-        .metric-box-value {
-            font-size: 2em;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        .card a {
-            color: #3498db;
-            text-decoration: none;
-            font-weight: 600;
-        }
-        .card a:hover {
-            text-decoration: underline;
-        }
-        .model-status-separator {
-            border-bottom: 2px solid #ecf0f1;
-            margin: 2rem 0;
-        }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </head>
 <body>
+    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme">
+        <span class="theme-toggle-icon">🌙</span>
+    </button>
     <div class="container">
         <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
 
