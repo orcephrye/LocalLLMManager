@@ -324,6 +324,12 @@ def get_context_by_model_name(model_name):
             return context
     return None
 
+def get_context_by_model_alias(model_alias):
+    """Finds the server context by the model's alias."""
+    for context in llm_server_contexts.values():
+        if context['alias'] == model_alias:
+            return context
+    return None
 
 def search_huggingface(query):
     """Searches Hugging Face for GGUF models supporting llama.cpp."""
@@ -553,6 +559,9 @@ def load_model():
         if '-ngl' not in custom_args and '--n-gpu-layers' not in custom_args:
             custom_args.extend(['-ngl', "-1"])
 
+        if '-a' not in custom_args and '--alias' not in custom_args:
+            custom_args.extend(["-a", model_file])
+
         command.extend(custom_args)
 
         logger.info(f"Starting server with command: {' '.join(command)}")
@@ -581,9 +590,16 @@ def load_model():
             flash(f"Failed to start llama-server. Check console for error: {stderr_output[:200]}...", "error")
             return redirect(url_for('index'))
 
+        alias = model_file
+        if "-a" in custom_args:
+            alias = custom_args[custom_args.index("-a") + 1]
+        elif "--alias" in custom_args:
+            alias = custom_args[custom_args.index("--alias") + 1]
+
         new_context = {
             "process": proc,
             "name": model_file,
+            "alias": alias,
             "port": port,
             "metrics_thread_stderr": None,
             "metrics_thread_stdout": None,
@@ -765,7 +781,7 @@ def proxy_models():
     model_data = []
     for port, context in llm_server_contexts.items():
         model_data.append({
-            "id": context['name'],  # Use filename as the model ID
+            "id": context['alias'],  # Use filename as the model ID
             "object": "model",
             "created": int(os.path.getmtime(os.path.join(MODEL_DIR, context['name']))) if os.path.exists(
                 os.path.join(MODEL_DIR, context['name'])) else int(time.time()),
@@ -796,7 +812,7 @@ def proxy_chat_completions():
     except Exception:
         return jsonify({"error": "Invalid JSON body"}), 400
 
-    context = get_context_by_model_name(model_name)
+    context = get_context_by_model_alias(model_name)
     if not context:
         return jsonify({"error": f"Model '{model_name}' is not loaded."}), 404
 

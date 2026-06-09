@@ -29,7 +29,8 @@
 
                 <div class="card">
                     <h2>Server Info</h2>
-                    <p><strong>Model:</strong> {{ context['name'] }}</p>
+                    <p><strong>Model Filename:</strong> {{ context['name'] }}</p>
+                    <p><strong>Model Alias:</strong> {{ context['alias'] }}</p>
                     <p><strong>Endpoint:</strong>
                         <code>
                             <a href="http://127.0.0.1:{{ port }}" target="_blank">
