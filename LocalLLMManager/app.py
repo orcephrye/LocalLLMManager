@@ -364,15 +364,25 @@ def list_gguf_files(repo_id):
 
 
 def get_local_models():
-    """Finds all .gguf files in the MODEL_DIR."""
+    """Finds all .gguf files in the MODEL_DIR recursively."""
     models = []
-    for filename in os.listdir(MODEL_DIR):
-        if filename.endswith(".gguf"):
-            if MULTI_PART_REGEX.findall(filename):
-                if '00001-of-' in filename:
-                    models.append(filename)
-                continue
-            models.append(filename)
+    if not os.path.exists(MODEL_DIR):
+        return models
+    for root, dirs, files in os.walk(MODEL_DIR):
+        # Prevent walking hidden folders like .git
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for filename in files:
+            if filename.endswith(".gguf"):
+                # Skip mmproj models from primary select
+                if "mmproj" in filename.lower():
+                    continue
+                rel_path = os.path.relpath(os.path.join(root, filename), MODEL_DIR)
+                rel_path = rel_path.replace(os.path.sep, '/')
+                if MULTI_PART_REGEX.findall(filename):
+                    if '00001-of-' in filename:
+                        models.append(rel_path)
+                    continue
+                models.append(rel_path)
     return models
 
 
@@ -473,20 +483,102 @@ def download_model():
     """Handles downloading a model from Hugging Face."""
     repo_id = request.form.get('repo_id')
     filename = request.form.get('filename')
+    quant_tag = request.form.get('quant_tag')
 
-    if not repo_id or not filename:
-        flash("Repo ID and Filename are required.", "error")
+    if not repo_id:
+        flash("Repo ID is required.", "error")
         return redirect(url_for('index'))
 
     try:
-        logger.info(f"Downloading {filename} from {repo_id}...")
-        hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            local_dir=MODEL_DIR
-        )
+        api = HfApi()
+        
+        # If filename is not provided, resolve it using the quant_tag
+        if not filename and quant_tag:
+            repo_info = api.repo_info(repo_id)
+            matching_files = []
+            for sibling in repo_info.siblings:
+                rfile = sibling.rfilename
+                if rfile.endswith(".gguf") and not "mmproj" in rfile.lower():
+                    if quant_tag.lower() in rfile.lower():
+                        matching_files.append(rfile)
+            
+            if not matching_files:
+                flash(f"No GGUF file matching quantization tag '{quant_tag}' found in repo '{repo_id}'.", "error")
+                referrer = request.referrer
+                return redirect(referrer or url_for('index'))
+            
+            # Select the first matching file, preferring exact casing if present
+            filename = matching_files[0]
+            for mf in matching_files:
+                if quant_tag in mf:
+                    filename = mf
+                    break
+
+        if not filename:
+            flash("Filename or Quant Tag is required.", "error")
+            return redirect(url_for('index'))
+
+        target_dir = os.path.join(MODEL_DIR, repo_id)
+        os.makedirs(target_dir, exist_ok=True)
+        dest_model_path = os.path.join(target_dir, filename)
+
+        if os.path.exists(dest_model_path) or os.path.islink(dest_model_path):
+            logger.info(f"Model file {filename} already exists at {dest_model_path}. Skipping download.")
+        else:
+            logger.info(f"Downloading {filename} from {repo_id} to standard cache...")
+            cached_model_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename
+            )
+            if os.path.exists(dest_model_path) or os.path.islink(dest_model_path):
+                os.remove(dest_model_path)
+            os.symlink(cached_model_path, dest_model_path)
+
+        mmproj_filename = None
+        # Check if a companion mmproj file exists in the repository (priority: BF16 -> F16 -> F32)
+        try:
+            repo_info = api.repo_info(repo_id)
+            sibling_names = [sibling.rfilename for sibling in repo_info.siblings]
+
+            def find_sibling(target):
+                for name in sibling_names:
+                    if name == target or name.endswith("/" + target):
+                        return name
+                return None
+
+            for target_opts in [("mmproj-BF16.gguf", "mmproj-bf16.gguf"),
+                                 ("mmproj-F16.gguf", "mmproj-f16.gguf"),
+                                 ("mmproj-F32.gguf", "mmproj-f32.gguf")]:
+                for opt in target_opts:
+                    found = find_sibling(opt)
+                    if found:
+                        mmproj_filename = found
+                        break
+                if mmproj_filename:
+                    break
+
+            if mmproj_filename:
+                local_mmproj_path = os.path.join(target_dir, mmproj_filename)
+                if os.path.exists(local_mmproj_path) or os.path.islink(local_mmproj_path):
+                    logger.info(f"mmproj file {mmproj_filename} already exists at {local_mmproj_path}. Skipping download.")
+                else:
+                    logger.info(f"Downloading mmproj file {mmproj_filename} from {repo_id} to standard cache...")
+                    cached_mmproj_path = hf_hub_download(
+                        repo_id=repo_id,
+                        filename=mmproj_filename
+                    )
+                    if os.path.exists(local_mmproj_path) or os.path.islink(local_mmproj_path):
+                        os.remove(local_mmproj_path)
+                    os.symlink(cached_mmproj_path, local_mmproj_path)
+                    logger.info(f"Downloaded and symlinked mmproj file {mmproj_filename} successfully.")
+        except Exception as mm_err:
+            logger.warning(f"Could not check or download mmproj file: {mm_err}")
+
         logger.info("Download complete.")
-        flash(f"Successfully downloaded {filename}!", "success")
+        if mmproj_filename:
+            flash(f"Successfully downloaded {filename} and {os.path.basename(mmproj_filename)}!", "success")
+        else:
+            flash(f"Successfully downloaded {filename}!", "success")
     except Exception as e:
         logger.error(f"Error downloading model: {e}")
         flash(f"Error downloading model: {e}", "error")
@@ -545,11 +637,25 @@ def load_model():
                     flash(f"Forbidden argument: '{flag_part}'. This is managed by the app.", "error")
                     return redirect(url_for('index'))
 
+    # Check if a companion mmproj file exists and add it to custom_args if not already specified
+    model_dir_path = os.path.dirname(model_path)
+    mmproj_path = None
+    if os.path.exists(os.path.join(model_dir_path, "mmproj-BF16.gguf")):
+        mmproj_path = os.path.join(model_dir_path, "mmproj-BF16.gguf")
+    elif os.path.exists(model_dir_path):
+        for f in os.listdir(model_dir_path):
+            if f.startswith("mmproj") and f.endswith(".gguf"):
+                mmproj_path = os.path.join(model_dir_path, f)
+                break
+    if mmproj_path and '--mmproj' not in custom_args:
+        custom_args.extend(['--mmproj', mmproj_path])
+
     try:
         port = find_next_available_port(STARTING_PORT)
         command = [
             LLAMA_SERVER_CMD,
             "-m", model_path,
+            "--host", "0.0.0.0",
             "--port", str(port)
         ]
 

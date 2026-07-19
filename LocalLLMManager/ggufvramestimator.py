@@ -63,23 +63,12 @@ class GGUFMetadataReader:
                 for _ in range(count): self._skip_value(8)
 
     def _read_metadata(self, count: int):
-        keys_to_read = {"general.architecture", "general.name"}
-        arch_specific_keys_added = False
         for _ in range(count):
             key = self._read_string()
             (value_type_idx,) = struct.unpack("<I", self.f.read(4))
-            if not arch_specific_keys_added and "general.architecture" in self.metadata:
-                prefix = self.metadata["general.architecture"]
-                keys_to_read.update({
-                    f"{prefix}.block_count", f"{prefix}.context_length",
-                    f"{prefix}.attention.head_count_kv", f"{prefix}.attention.key_length",
-                    f"{prefix}.attention.value_length", f"{prefix}.attention.sliding_window_size"
-                })
-                arch_specific_keys_added = True
-            if key in keys_to_read:
-                self.metadata[key] = self._read_value(value_type_idx)
-            else:
-                self._skip_value(value_type_idx)
+            val = self._read_value(value_type_idx)
+            if val is not None:
+                self.metadata[key] = val
 
 
 def get_total_model_size_from_disk(gguf_file_path: str) -> int:
@@ -116,11 +105,32 @@ def run_estimator(gguf_file: str, context_sizes: List[int], overhead_gib: float)
         model_size_bytes = get_total_model_size_from_disk(gguf_file)
         overhead_bytes = int(overhead_gib * 1024 ** 3)
 
-        n_layers = metadata[f"{prefix}.block_count"]
-        n_head_kv = metadata[f"{prefix}.attention.head_count_kv"]
+        n_layers = metadata.get(f"{prefix}.block_count")
+        if n_layers is None:
+            raise KeyError(f"Could not read '{prefix}.block_count' from model metadata.")
+
+        n_head = metadata.get(f"{prefix}.attention.head_count")
+        n_head_kv = metadata.get(f"{prefix}.attention.head_count_kv")
+        if n_head_kv is None:
+            n_head_kv = n_head if n_head is not None else 32
+
         training_context = metadata.get(f"{prefix}.context_length", 0)
-        n_embd_head_k = metadata[f"{prefix}.attention.key_length"]
-        n_embd_head_v = metadata[f"{prefix}.attention.value_length"]
+
+        n_embd = metadata.get(f"{prefix}.embedding_length")
+        n_embd_head_k = metadata.get(f"{prefix}.attention.key_length")
+        if n_embd_head_k is None:
+            if n_embd is not None and n_head is not None:
+                n_embd_head_k = n_embd // n_head
+            else:
+                n_embd_head_k = 128
+
+        n_embd_head_v = metadata.get(f"{prefix}.attention.value_length")
+        if n_embd_head_v is None:
+            if n_embd is not None and n_head is not None:
+                n_embd_head_v = n_embd // n_head
+            else:
+                n_embd_head_v = 128
+
         swa_window_size = metadata.get(f"{prefix}.attention.sliding_window_size", 0)
 
         is_scout_model = "scout" in metadata.get("general.name", "").lower()

@@ -68,9 +68,9 @@
             <h2>1. Download Model</h2>
             <form action="/download" method="POST" class="download-form">
                 <label for="repo_id">Hugging Face Repo ID:</label>
-                <input type="text" id="repo_id" name="repo_id" placeholder="e.g., TheBloke/Llama-3-8B-Instruct-GGUF">
-                <label for="filename">GGUF Filename:</label>
-                <input type="text" id="filename" name="filename" placeholder="e.g., llama-3-8b-instruct.Q4_K_M.gguf">
+                <input type="text" id="repo_id" name="repo_id" placeholder="e.g., unsloth/gemma-4-31B-it-GGUF">
+                <label for="quant_tag">Quant Tag:</label>
+                <input type="text" id="quant_tag" name="quant_tag" placeholder="e.g., UD-Q4_K_XL">
                 <button type="submit">Download</button>
             </form>
         </div>
