@@ -72,8 +72,54 @@
                 <input type="text" id="repo_id" name="repo_id" placeholder="e.g., unsloth/gemma-4-31B-it-GGUF">
                 <label for="quant_tag">Quant Tag:</label>
                 <input type="text" id="quant_tag" name="quant_tag" placeholder="e.g., UD-Q4_K_XL">
+
+                <label>Select Target Nodes:</label>
+                <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 1.25rem;">
+                    <label style="font-weight: normal; display: flex; align-items: center; gap: 8px; margin-bottom: 0; cursor: pointer;">
+                        <input type="checkbox" id="download_all_nodes" onchange="toggleAllNodes(this)">
+                        <strong>Select All Active Nodes</strong>
+                    </label>
+                    {% for node in nodes %}
+                        <label style="font-weight: normal; display: flex; align-items: center; gap: 8px; margin-bottom: 0; cursor: {% if node.is_active %}pointer{% else %}not-allowed{% endif %}; {% if not node.is_active %}opacity: 0.5;{% endif %}">
+                            <input type="checkbox" class="node-download-checkbox" name="node_ids" value="{{ node.id }}" {% if not node.is_active %}disabled{% elif node.is_local %}checked{% endif %}>
+                            Node {{ node.id }}: {{ node.host }} {% if node.is_local %}(Local){% endif %}
+                            {% if not node.is_active %}
+                                <span style="color: var(--flash-error-text); font-size: 0.8rem;">(Offline: {{ node.status_msg }})</span>
+                            {% else %}
+                                <span style="color: var(--secondary-color); font-size: 0.8rem;">(Active)</span>
+                            {% endif %}
+                        </label>
+                    {% endfor %}
+                </div>
+
                 <button type="submit">Download</button>
             </form>
+
+            {% if downloads_list %}
+                <div style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                    <h3 style="margin-bottom: 1rem; font-size: 1.15rem; font-weight: 600;">Background Download Tasks</h3>
+                    <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
+                        {% for task in downloads_list %}
+                            <li style="padding: 10px; background: var(--container-bg); border: 1px solid var(--border-color); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <strong>{{ task.repo_id }}</strong> {% if task.val %}<small>({{ task.val }})</small>{% endif %}
+                                    <br><small style="color: var(--text-muted);">Node {{ task.node_id }} | Started at: {{ task.timestamp }}</small>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    {% if task.status == 'Downloading' %}
+                                        <span class="tag" style="background-color: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;">Downloading</span>
+                                    {% elif task.status == 'Completed' %}
+                                        <span class="tag" style="background-color: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;">Success</span>
+                                    {% else %}
+                                        <span class="tag" style="background-color: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;">Failed</span>
+                                    {% endif %}
+                                    <span style="font-size: 0.85rem; max-width: 300px; word-break: break-all; text-align: right; color: var(--text-muted);">{{ task.message }}</span>
+                                </div>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
         </div>
 
         <div class="card">
@@ -180,6 +226,13 @@
         if (modelSelect) {
             modelSelect.addEventListener('change', updateCustomArgs);
             updateCustomArgs();
+        }
+
+        function toggleAllNodes(masterCheckbox) {
+            const checkboxes = document.querySelectorAll('.node-download-checkbox:not([disabled])');
+            checkboxes.forEach(cb => {
+                cb.checked = masterCheckbox.checked;
+            });
         }
 
         // Get the modals

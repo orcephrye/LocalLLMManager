@@ -179,6 +179,165 @@ def load_nodes_config(use_local_node_flag=None):
     return nodes
 
 
+def run_ssh_command(node, command, timeout=60):
+    """Runs a command on a node (local or remote via SSH). Returns (returncode, stdout, stderr)."""
+    if node["is_local"]:
+        try:
+            res = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            return res.returncode, res.stdout, res.stderr
+        except subprocess.TimeoutExpired as e:
+            return -1, "", f"Local command timed out: {e}"
+        except Exception as e:
+            return -1, "", f"Local command failed: {e}"
+    else:
+        ssh_cmd = [
+            "ssh",
+            "-i", node["keyfile"],
+            "-o", "StrictHostKeyChecking=accept-new",
+            f"{node['username']}@{node['host']}",
+            command
+        ]
+        try:
+            res = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            return res.returncode, res.stdout, res.stderr
+        except subprocess.TimeoutExpired as e:
+            return -1, "", f"SSH command timed out: {e}"
+        except Exception as e:
+            return -1, "", f"SSH connection or execution failed: {e}"
+
+
+def setup_remote_node(node):
+    """
+    Sets up the remote node by verifying python 3.11+, cloning the repo,
+    setting up a virtual environment, and installing requirements.
+    Returns (success, message).
+    """
+    if node["is_local"]:
+        return True, "Local node is already set up."
+
+    # 1. Verify python 3.11+ is installed
+    py_check_cmd = "python3 -c 'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
+    rc, stdout, stderr = run_ssh_command(node, py_check_cmd)
+    if rc != 0:
+        return False, f"Failed to run python3 check on remote node: {stderr.strip()}"
+    
+    version_str = stdout.strip()
+    try:
+        major, minor = map(int, version_str.split('.'))
+        if major < 3 or (major == 3 and minor < 11):
+            return False, f"Python version on remote node is too old: {version_str}. Require >= 3.11."
+    except Exception as e:
+        return False, f"Could not parse python version '{version_str}': {e}"
+
+    # 2. Check and clone repository
+    clone_cmd = (
+        'if [ ! -d "$HOME/LocalLLMManager" ]; then '
+        'git clone https://github.com/orcephrye/LocalLLMManager.git "$HOME"/LocalLLMManager; '
+        'else '
+        'echo "Repository already exists."; '
+        'fi'
+    )
+    rc, stdout, stderr = run_ssh_command(node, clone_cmd)
+    if rc != 0:
+        return False, f"Failed to check/clone repository: {stderr.strip()}"
+
+    # 3. Create virtual environment .venv if it doesn't exist
+    venv_cmd = (
+        'if [ ! -d "$HOME/LocalLLMManager/.venv" ]; then '
+        'python3 -m venv "$HOME"/LocalLLMManager/.venv; '
+        'else '
+        'echo "Virtual environment already exists."; '
+        'fi'
+    )
+    rc, stdout, stderr = run_ssh_command(node, venv_cmd)
+    if rc != 0:
+        return False, f"Failed to create virtual environment: {stderr.strip()}"
+
+    # 4. Upgrade pip and install requirements.txt
+    pip_install_cmd = (
+        '"$HOME"/LocalLLMManager/.venv/bin/pip install --upgrade pip && '
+        '"$HOME"/LocalLLMManager/.venv/bin/pip install -r "$HOME"/LocalLLMManager/requirements.txt'
+    )
+    rc, stdout, stderr = run_ssh_command(node, pip_install_cmd, timeout=180)
+    if rc != 0:
+        return False, f"Failed to install requirements: {stderr.strip()}"
+
+    return True, "Remote node setup completed successfully."
+
+
+def validate_node(node):
+    """
+    Validates a node configuration.
+    For local node, always returns True.
+    For remote nodes:
+      1. Tests SSH connection.
+      2. If remote setup has not run (repo or venv missing), runs setup_remote_node.
+      3. Verifies llama-server --list-devices has at least 1 device.
+      4. Verifies app.py --help runs successfully using the remote venv.
+    Returns (is_valid, status_message).
+    """
+    if node["is_local"]:
+        return True, "Local node is active."
+
+    # 1. First test basic SSH access
+    rc, stdout, stderr = run_ssh_command(node, "echo 'ping'")
+    if rc != 0:
+        return False, f"SSH connection failed: {stderr.strip()}"
+
+    # 2. Check if remote setup is needed (check if venv exists)
+    check_setup_cmd = '[ -d "$HOME/LocalLLMManager/.venv" ]'
+    rc_setup, _, _ = run_ssh_command(node, check_setup_cmd)
+    if rc_setup != 0:
+        logger.info(f"Node {node['id']} ({node['host']}) setup not found. Initiating remote setup...")
+        setup_success, setup_msg = setup_remote_node(node)
+        if not setup_success:
+            return False, f"Remote setup failed: {setup_msg}"
+
+    # 3. Verify llama-server --list-devices
+    llama_server_cmd = str(pathlib.Path(node["llama_bin_path"]).joinpath('llama-server'))
+    devices_cmd = f"{llama_server_cmd} --list-devices"
+    rc_dev, stdout_dev, stderr_dev = run_ssh_command(node, devices_cmd)
+    if rc_dev != 0:
+        return False, f"Failed to list devices on remote node: {stderr_dev.strip()}"
+
+    # Parse devices
+    lines = [line.strip() for line in stdout_dev.split('\n') if line.strip()]
+    devices = []
+    found_header = False
+    for line in lines:
+        if "Available devices:" in line:
+            found_header = True
+            continue
+        if found_header:
+            devices.append(line)
+            
+    if len(devices) < 1:
+        return False, "No active acceleration/compute devices found on the remote node (zero devices)."
+
+    # 4. Verify remote app.py --help can run
+    help_cmd = '"$HOME"/LocalLLMManager/.venv/bin/python3 "$HOME"/LocalLLMManager/LocalLLMManager/app.py --help'
+    rc_help, stdout_help, stderr_help = run_ssh_command(node, help_cmd)
+    if rc_help != 0:
+        return False, f"Failed to run remote app.py --help: {stderr_help.strip()}"
+    
+    if "usage: app.py" not in stdout_help:
+        return False, "Remote app.py help output format invalid."
+
+    return True, f"Node is valid and active. Detected devices: {', '.join(devices)}"
+
+
+
 def parse_logs(log_line, metrics):
     lines = log_line.strip().split()
     try:
@@ -622,6 +781,18 @@ def index():
     proxy_port = app.config.get('PROXY_PORT', 'N/A')
     display_host = "127.0.0.1" if proxy_host == "0.0.0.0" else proxy_host
 
+    downloads_list = []
+    for key, data in background_downloads.items():
+        node_id, repo_id, val = key
+        downloads_list.append({
+            "node_id": node_id,
+            "repo_id": repo_id,
+            "val": val,
+            "status": data["status"],
+            "message": data["message"],
+            "timestamp": data["timestamp"]
+        })
+
     return render_template(
         'index.html',
         models=local_models,
@@ -629,7 +800,9 @@ def index():
         all_custom_args_json=all_custom_args_json,
         proxy_host=proxy_host,
         display_host=display_host,
-        proxy_port=proxy_port
+        proxy_port=proxy_port,
+        nodes=NODES,
+        downloads_list=downloads_list
     )
 
 
@@ -853,25 +1026,108 @@ def download_model_from_hf(repo_id, filename=None, quant_tag=None):
         return False, str(e), None
 
 
+import datetime
+import shlex
+
+# Dict to store active/past background downloads
+# Key: (node_id, repo_id, filename or quant_tag)
+# Value: {"status": "Downloading" | "Completed" | "Failed", "message": str, "timestamp": str}
+background_downloads = {}
+
+def download_worker(node, repo_id, filename, quant_tag):
+    key = (node["id"], repo_id, filename or quant_tag or "default")
+    background_downloads[key] = {
+        "status": "Downloading",
+        "message": f"Downloading {repo_id} on {node['host']}...",
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    try:
+        if node["is_local"]:
+            success, result, mmproj_filename = download_model_from_hf(repo_id, filename, quant_tag)
+            if success:
+                msg = f"Successfully downloaded {result}"
+                if mmproj_filename:
+                    msg += f" and {os.path.basename(mmproj_filename)}"
+                background_downloads[key]["status"] = "Completed"
+                background_downloads[key]["message"] = msg
+                logger.info(f"Local download worker success: {msg}")
+            else:
+                background_downloads[key]["status"] = "Failed"
+                background_downloads[key]["message"] = result
+                logger.error(f"Local download worker failed: {result}")
+        else:
+            # Remote download using remote app.py CLI
+            cmd = f'"$HOME"/LocalLLMManager/.venv/bin/python3 "$HOME"/LocalLLMManager/LocalLLMManager/app.py --repo-id {shlex.quote(repo_id)}'
+            if filename:
+                cmd += f' --filename {shlex.quote(filename)}'
+            if quant_tag:
+                cmd += f' --quant-tag {shlex.quote(quant_tag)}'
+            if node.get("model_dir"):
+                cmd += f' --model-dir {shlex.quote(node["model_dir"])}'
+                
+            logger.info(f"Triggering remote download on Node {node['id']} ({node['host']}): {cmd}")
+            rc, stdout, stderr = run_ssh_command(node, cmd, timeout=900) # 15 minutes timeout
+            
+            if rc == 0:
+                success_msg = "Download completed."
+                for line in stdout.split('\n'):
+                    if "SUCCESS:" in line:
+                        success_msg = line.replace("SUCCESS:", "").strip()
+                        break
+                background_downloads[key]["status"] = "Completed"
+                background_downloads[key]["message"] = success_msg
+                logger.info(f"Remote download success on Node {node['id']}: {success_msg}")
+            else:
+                err_msg = stderr.strip() if stderr.strip() else stdout.strip()
+                if not err_msg:
+                    err_msg = f"Process exited with code {rc}"
+                background_downloads[key]["status"] = "Failed"
+                background_downloads[key]["message"] = err_msg
+                logger.error(f"Remote download failed on Node {node['id']}: {err_msg}")
+                
+    except Exception as e:
+        background_downloads[key]["status"] = "Failed"
+        background_downloads[key]["message"] = str(e)
+        logger.error(f"Download worker exception for Node {node['id']}: {e}")
+
+
 @app.route('/download', methods=['POST'])
 def download_model():
-    """Handles downloading a model from Hugging Face."""
+    """Handles downloading a model from Hugging Face on one or more nodes."""
     repo_id = request.form.get('repo_id')
     filename = request.form.get('filename')
     quant_tag = request.form.get('quant_tag')
+    node_ids_str = request.form.getlist('node_ids')
 
     if not repo_id:
         flash("Repo ID is required.", "error")
         return redirect(url_for('index'))
 
-    success, result, mmproj_filename = download_model_from_hf(repo_id, filename, quant_tag)
-    if success:
-        if mmproj_filename:
-            flash(f"Successfully downloaded {result} and {os.path.basename(mmproj_filename)}!", "success")
-        else:
-            flash(f"Successfully downloaded {result}!", "success")
+    if not node_ids_str:
+        flash("Please select at least one target node for the download.", "error")
+        return redirect(url_for('index'))
+
+    started_nodes = []
+    for nid_str in node_ids_str:
+        try:
+            nid = int(nid_str)
+            node = next((n for n in NODES if n["id"] == nid), None)
+            if node and node.get("is_active"):
+                thread = threading.Thread(
+                    target=download_worker,
+                    args=(node, repo_id, filename, quant_tag),
+                    daemon=True
+                )
+                thread.start()
+                started_nodes.append(node["host"])
+        except ValueError:
+            continue
+
+    if started_nodes:
+        flash(f"Download task(s) started in the background on: {', '.join(started_nodes)}. You can monitor the progress on the Model Manager page.", "success")
     else:
-        flash(f"Error downloading model: {result}", "error")
+        flash("Failed to start downloads. Ensure selected nodes are active.", "error")
 
     referrer = request.referrer
     if referrer:
@@ -1346,7 +1602,6 @@ if __name__ == '__main__':
     # Create the directory if it doesn't exist
     os.makedirs(MODEL_DIR, exist_ok=True)
 
-    global NODES
     NODES = load_nodes_config(args.use_local_node)
 
     if args.print_model_dir_path:
@@ -1366,9 +1621,15 @@ if __name__ == '__main__':
     if not args.verbose:
         logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
-    logger.info(f"Loaded {len(NODES)} nodes configuration:")
+    logger.info(f"Loaded {len(NODES)} nodes configuration. Validating node connections...")
     for node in NODES:
-        logger.info(f"  Node {node['id']}: {node['host']} (Local: {node['is_local']})")
+        is_valid, msg = validate_node(node)
+        node["is_active"] = is_valid
+        node["status_msg"] = msg
+        if is_valid:
+            logger.info(f"  Node {node['id']} ({node['host']}): ACTIVE - {msg}")
+        else:
+            logger.error(f"  Node {node['id']} ({node['host']}): OFFLINE - {msg}")
 
     if args.download_repo_id:
         success, result, mmproj_filename = download_model_from_hf(
