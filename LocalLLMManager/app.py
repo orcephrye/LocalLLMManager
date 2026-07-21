@@ -217,6 +217,57 @@ def run_ssh_command(node, command, timeout=60):
             return -1, "", f"SSH connection or execution failed: {e}"
 
 
+def sync_code_to_node(node):
+    """Syncs local code files (excluding models/DB) to the remote node via SCP."""
+    if node["is_local"]:
+        return True, "No sync needed for local node."
+        
+    try:
+        # Copy app.py
+        app_src = os.path.join(APP_DIR, "app.py")
+        app_dest = f"{node['username']}@{node['host']}:~/LocalLLMManager/LocalLLMManager/app.py"
+        res = subprocess.run([
+            "scp", "-i", node["keyfile"], "-o", "StrictHostKeyChecking=accept-new",
+            app_src, app_dest
+        ], capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False, f"Failed to sync app.py: {res.stderr.strip()}"
+            
+        # Copy ggufvramestimator.py
+        est_src = os.path.join(APP_DIR, "ggufvramestimator.py")
+        est_dest = f"{node['username']}@{node['host']}:~/LocalLLMManager/LocalLLMManager/ggufvramestimator.py"
+        res = subprocess.run([
+            "scp", "-i", node["keyfile"], "-o", "StrictHostKeyChecking=accept-new",
+            est_src, est_dest
+        ], capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False, f"Failed to sync ggufvramestimator.py: {res.stderr.strip()}"
+            
+        # Copy templates
+        tmpl_src = os.path.join(APP_DIR, "templates")
+        tmpl_dest = f"{node['username']}@{node['host']}:~/LocalLLMManager/LocalLLMManager/"
+        res = subprocess.run([
+            "scp", "-i", node["keyfile"], "-o", "StrictHostKeyChecking=accept-new", "-r",
+            tmpl_src, tmpl_dest
+        ], capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False, f"Failed to sync templates: {res.stderr.strip()}"
+            
+        # Copy static
+        static_src = os.path.join(APP_DIR, "static")
+        static_dest = f"{node['username']}@{node['host']}:~/LocalLLMManager/LocalLLMManager/"
+        res = subprocess.run([
+            "scp", "-i", node["keyfile"], "-o", "StrictHostKeyChecking=accept-new", "-r",
+            static_src, static_dest
+        ], capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            return False, f"Failed to sync static assets: {res.stderr.strip()}"
+            
+        return True, "Code sync complete."
+    except Exception as e:
+        return False, str(e)
+
+
 def setup_remote_node(node):
     """
     Sets up the remote node by verifying python 3.11+, cloning the repo,
@@ -273,6 +324,11 @@ def setup_remote_node(node):
     if rc != 0:
         return False, f"Failed to install requirements: {stderr.strip()}"
 
+    # 5. Sync local codebase to remote node via scp
+    sync_success, sync_msg = sync_code_to_node(node)
+    if not sync_success:
+        return False, f"Initial code sync failed: {sync_msg}"
+
     return True, "Remote node setup completed successfully."
 
 
@@ -303,6 +359,11 @@ def validate_node(node):
         setup_success, setup_msg = setup_remote_node(node)
         if not setup_success:
             return False, f"Remote setup failed: {setup_msg}"
+    else:
+        # If setup already exists, just sync code files to ensure latest version is present
+        sync_success, sync_msg = sync_code_to_node(node)
+        if not sync_success:
+            return False, f"Remote code sync failed: {sync_msg}"
 
     # 3. Verify llama-server --list-devices
     llama_server_cmd = str(pathlib.Path(node["llama_bin_path"]).joinpath('llama-server'))
@@ -407,6 +468,19 @@ def find_next_available_port(start_port):
             # Port is already in use by another process
             logger.info(f"Port {port} is in use by another process, trying next.")
             port += 1
+
+
+def find_remote_port(node):
+    """Finds an available port on the remote node."""
+    cmd = 'python3 -c "import socket; s=socket.socket(); s.bind((\'\', 0)); print(s.getsockname()[1]); s.close()"'
+    rc, stdout, stderr = run_ssh_command(node, cmd)
+    if rc == 0:
+        try:
+            return int(stdout.strip())
+        except ValueError:
+            pass
+    return 8100 # Fallback
+
 
 
 def init_db():
@@ -773,7 +847,25 @@ def delete_local_repo(repo_dir):
 def index():
     """Main page - displays controls and output."""
 
-    local_models = get_local_models()
+    local_models = []
+    first_active_node = next((n for n in NODES if n.get("is_active")), None)
+    if first_active_node:
+        if first_active_node["is_local"]:
+            local_models = get_local_models()
+        else:
+            try:
+                cmd_repos = (
+                    f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+                    f'import sys, json; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+                    f'import app; app.MODEL_DIR=\'{first_active_node["model_dir"]}\'; '
+                    f'print(json.dumps(app.get_local_models()))"'
+                )
+                rc, stdout, _ = run_ssh_command(first_active_node, cmd_repos)
+                if rc == 0:
+                    local_models = json.loads(stdout.strip())
+            except Exception as e:
+                logger.error(f"Error fetching remote models for index page: {e}")
+
     all_custom_args = get_all_custom_args()
     all_custom_args_json = json.dumps(all_custom_args)
 
@@ -822,12 +914,62 @@ def browse_models():
 @app.route('/manage')
 def manage_local_models():
     """Displays local models and files with disk usage and delete actions."""
-    repos = get_local_repos_and_files()
-    disk_info = get_disk_space_info()
+    node_id_str = request.args.get('node_id', '0')
+    try:
+        node_id = int(node_id_str)
+    except ValueError:
+        node_id = 0
+        
+    node = next((n for n in NODES if n["id"] == node_id), None)
+    if not node or not node.get("is_active"):
+        # Fallback to local active node
+        node = next((n for n in NODES if n["is_local"]), NODES[0])
+        node_id = node["id"]
+        
+    if node["is_local"]:
+        repos = get_local_repos_and_files()
+        disk_info = get_disk_space_info()
+    else:
+        # Fetch remote repos
+        cmd_repos = (
+            f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+            f'import sys, json; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+            f'import app; app.MODEL_DIR=\'{node["model_dir"]}\'; '
+            f'print(json.dumps(app.get_local_repos_and_files()))"'
+        )
+        rc_repos, stdout_repos, stderr_repos = run_ssh_command(node, cmd_repos)
+        if rc_repos == 0:
+            try:
+                repos = json.loads(stdout_repos.strip())
+            except Exception as e:
+                repos = []
+                flash(f"Failed to parse remote models: {e}", "error")
+        else:
+            repos = []
+            flash(f"Failed to load remote models list: {stderr_repos.strip()}", "error")
+            
+        # Fetch remote disk space
+        cmd_disk = (
+            f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+            f'import sys, json; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+            f'import app; app.MODEL_DIR=\'{node["model_dir"]}\'; '
+            f'print(json.dumps(app.get_disk_space_info()))"'
+        )
+        rc_disk, stdout_disk, _ = run_ssh_command(node, cmd_disk)
+        if rc_disk == 0:
+            try:
+                disk_info = json.loads(stdout_disk.strip())
+            except Exception:
+                disk_info = {"total": "N/A", "used": "N/A", "free": "N/A", "percent": 0.0}
+        else:
+            disk_info = {"total": "N/A", "used": "N/A", "free": "N/A", "percent": 0.0}
+
     return render_template(
         'manage.html',
         repos=repos,
-        disk_info=disk_info
+        disk_info=disk_info,
+        nodes=NODES,
+        selected_node_id=node_id
     )
 
 
@@ -835,42 +977,104 @@ def manage_local_models():
 def delete_file_route():
     """Endpoint to delete a specific model file."""
     file_path = request.form.get('file_path')
+    node_id_str = request.form.get('node_id', '0')
+    
     if not file_path:
         flash("File path is required.", "error")
+        return redirect(url_for('manage_local_models', node_id=node_id_str))
+
+    try:
+        node_id = int(node_id_str)
+        node = next((n for n in NODES if n["id"] == node_id), None)
+        if not node or not node.get("is_active"):
+            flash("Selected node is inactive or invalid.", "error")
+            return redirect(url_for('manage_local_models'))
+    except ValueError:
+        flash("Invalid node selection.", "error")
         return redirect(url_for('manage_local_models'))
 
-    if not is_path_in_model_dir(file_path):
-        flash("Invalid file path.", "error")
-        return redirect(url_for('manage_local_models'))
+    if node["is_local"]:
+        if not is_path_in_model_dir(file_path):
+            flash("Invalid file path.", "error")
+            return redirect(url_for('manage_local_models', node_id=node_id_str))
 
-    success, message = delete_local_file(file_path)
-    if success:
-        flash(message, "success")
+        success, message = delete_local_file(file_path)
+        if success:
+            flash(message, "success")
+        else:
+            flash(f"Error deleting file: {message}", "error")
     else:
-        flash(f"Error deleting file: {message}", "error")
+        # Delete file remotely via SSH by invoking python code on the remote machine
+        cmd_delete = (
+            f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+            f'import sys; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+            f'import app; app.MODEL_DIR=\'{node["model_dir"]}\'; '
+            f'success, msg = app.delete_local_file(\'{file_path}\'); '
+            f'print(f\'SUCCESS: {msg}\' if success else f\'ERROR: {msg}\')"'
+        )
+        rc, stdout, stderr = run_ssh_command(node, cmd_delete)
+        if rc == 0:
+            out = stdout.strip()
+            if out.startswith("SUCCESS:"):
+                flash(out.replace("SUCCESS:", "").strip(), "success")
+            else:
+                flash(out.replace("ERROR:", "").strip(), "error")
+        else:
+            flash(f"Failed to delete file on remote node: {stderr.strip()}", "error")
 
-    return redirect(url_for('manage_local_models'))
+    return redirect(url_for('manage_local_models', node_id=node_id_str))
 
 
 @app.route('/delete_repo', methods=['POST'])
 def delete_repo_route():
     """Endpoint to delete an entire repository directory."""
     repo_path = request.form.get('repo_path')
+    node_id_str = request.form.get('node_id', '0')
+    
     if not repo_path:
         flash("Repository path is required.", "error")
+        return redirect(url_for('manage_local_models', node_id=node_id_str))
+
+    try:
+        node_id = int(node_id_str)
+        node = next((n for n in NODES if n["id"] == node_id), None)
+        if not node or not node.get("is_active"):
+            flash("Selected node is inactive or invalid.", "error")
+            return redirect(url_for('manage_local_models'))
+    except ValueError:
+        flash("Invalid node selection.", "error")
         return redirect(url_for('manage_local_models'))
 
-    if not is_path_in_model_dir(repo_path):
-        flash("Invalid repository path.", "error")
-        return redirect(url_for('manage_local_models'))
+    if node["is_local"]:
+        if not is_path_in_model_dir(repo_path):
+            flash("Invalid repository path.", "error")
+            return redirect(url_for('manage_local_models', node_id=node_id_str))
 
-    success, message = delete_local_repo(repo_path)
-    if success:
-        flash(message, "success")
+        success, message = delete_local_repo(repo_path)
+        if success:
+            flash(message, "success")
+        else:
+            flash(f"Error deleting repository: {message}", "error")
     else:
-        flash(f"Error deleting repository: {message}", "error")
+        # Delete repo remotely via SSH by invoking python code on the remote machine
+        cmd_delete = (
+            f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+            f'import sys; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+            f'import app; app.MODEL_DIR=\'{node["model_dir"]}\'; '
+            f'success, msg = app.delete_local_repo(\'{repo_path}\'); '
+            f'print(f\'SUCCESS: {msg}\' if success else f\'ERROR: {msg}\')"'
+        )
+        rc, stdout, stderr = run_ssh_command(node, cmd_delete)
+        if rc == 0:
+            out = stdout.strip()
+            if out.startswith("SUCCESS:"):
+                flash(out.replace("SUCCESS:", "").strip(), "success")
+            else:
+                flash(out.replace("ERROR:", "").strip(), "error")
+        else:
+            flash(f"Failed to delete repository on remote node: {stderr.strip()}", "error")
 
-    return redirect(url_for('manage_local_models'))
+    return redirect(url_for('manage_local_models', node_id=node_id_str))
 
 
 @app.route('/search_hf')
@@ -1142,17 +1346,37 @@ def load_model():
     model_file = request.form.get('model_file')
     model_alias = request.form.get('model_alias', '').strip()
     custom_args_str = request.form.get('custom_args', '')
+    node_id_str = request.form.get('node_id', '0')
 
     if not model_file:
         flash("No model selected.", "error")
         return redirect(url_for('index'))
 
-    model_path = os.path.join(MODEL_DIR, model_file)
-
-    if not os.path.exists(model_path):
-        flash(f"Model file not found: {model_file}", "error")
+    try:
+        node_id = int(node_id_str)
+        node = next((n for n in NODES if n["id"] == node_id), None)
+        if not node or not node.get("is_active"):
+            flash("Selected node is inactive or invalid.", "error")
+            return redirect(url_for('index'))
+    except ValueError:
+        flash("Invalid node selection.", "error")
         return redirect(url_for('index'))
 
+    # Check if model exists on the target node
+    if node["is_local"]:
+        model_path = os.path.join(MODEL_DIR, model_file)
+        if not os.path.exists(model_path):
+            flash(f"Model file not found: {model_file}", "error")
+            return redirect(url_for('index'))
+    else:
+        remote_model_path = os.path.join(node["model_dir"], model_file)
+        check_file_cmd = f'[ -f "{remote_model_path}" ]'
+        rc_f, _, _ = run_ssh_command(node, check_file_cmd)
+        if rc_f != 0:
+            flash(f"Model file not found on remote node {node['host']}: {model_file}", "error")
+            return redirect(url_for('index'))
+
+    # Forbidden flags check
     FORBIDDEN_FLAGS = {
         '-m', '--model', '-mu', '--model-url',
         '-dr', '--docker-repo',
@@ -1185,103 +1409,217 @@ def load_model():
                     flash(f"Forbidden argument: '{flag_part}'. This is managed by the app.", "error")
                     return redirect(url_for('index'))
 
-    # Check if a companion mmproj file exists and add it to custom_args if not already specified
-    model_dir_path = os.path.dirname(model_path)
+    # Determine mmproj companion path
     mmproj_path = None
-    if os.path.exists(os.path.join(model_dir_path, "mmproj-BF16.gguf")):
-        mmproj_path = os.path.join(model_dir_path, "mmproj-BF16.gguf")
-    elif os.path.exists(model_dir_path):
-        for f in os.listdir(model_dir_path):
-            if f.startswith("mmproj") and f.endswith(".gguf"):
-                mmproj_path = os.path.join(model_dir_path, f)
-                break
+    if node["is_local"]:
+        model_dir_path = os.path.dirname(model_path)
+        if os.path.exists(os.path.join(model_dir_path, "mmproj-BF16.gguf")):
+            mmproj_path = os.path.join(model_dir_path, "mmproj-BF16.gguf")
+        elif os.path.exists(model_dir_path):
+            for f in os.listdir(model_dir_path):
+                if f.startswith("mmproj") and f.endswith(".gguf"):
+                    mmproj_path = os.path.join(model_dir_path, f)
+                    break
+    else:
+        model_dir_remote = os.path.dirname(remote_model_path)
+        cmd_mmproj = (
+            f'python3 -c "import os; '
+            f'd=\'{model_dir_remote}\'; '
+            f'print(next((f for f in os.listdir(d) if f.startswith(\'mmproj\') and f.endswith(\'.gguf\')), \'\') '
+            f'if os.path.exists(d) else \'\')"'
+        )
+        rc_mm, stdout_mm, _ = run_ssh_command(node, cmd_mmproj)
+        mmproj_filename = stdout_mm.strip()
+        if mmproj_filename:
+            mmproj_path = os.path.join(model_dir_remote, mmproj_filename)
+
     if mmproj_path and '--mmproj' not in custom_args:
         custom_args.extend(['--mmproj', mmproj_path])
 
+    if '-c' not in custom_args and '--context-size' not in custom_args:
+        custom_args.extend(['-c', "4096"])
+
+    if '-ngl' not in custom_args and '--n-gpu-layers' not in custom_args:
+        custom_args.extend(['-ngl', "-1"])
+
+    alias = model_alias if model_alias else model_file
+    custom_args.extend(["-a", alias])
+
     try:
-        port = find_next_available_port(STARTING_PORT)
-        command = [
-            LLAMA_SERVER_CMD,
-            "-m", model_path,
-            "--host", "0.0.0.0",
-            "--port", str(port)
-        ]
+        local_port = find_next_available_port(STARTING_PORT)
+        
+        if node["is_local"]:
+            remote_port = local_port
+            command = [
+                LLAMA_SERVER_CMD,
+                "-m", model_path,
+                "--host", "0.0.0.0",
+                "--port", str(local_port)
+            ]
+            command.extend(custom_args)
 
-        if '-c' not in custom_args and '--context-size' not in custom_args:
-            custom_args.extend(['-c', "4096"])
+            logger.info(f"Starting local server with command: {' '.join(command)}")
 
-        if '-ngl' not in custom_args and '--n-gpu-layers' not in custom_args:
-            custom_args.extend(['-ngl', "-1"])
+            create_new_group_flags = {}
+            if os.name == 'posix':
+                create_new_group_flags['preexec_fn'] = os.setsid
+            elif os.name == 'nt':
+                create_new_group_flags['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        # Determine the alias to use
-        alias = model_alias if model_alias else model_file
-        custom_args.extend(["-a", alias])
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **create_new_group_flags
+            )
 
-        command.extend(custom_args)
+            sleep(10)
 
-        logger.info(f"Starting server with command: {' '.join(command)}")
+            return_code = proc.poll()
+            if return_code is not None:
+                stderr_output = proc.stderr.read()
+                logger.error(f"Failed to start llama-server. Return code: {return_code}")
+                logger.error(f"Stderr: {stderr_output}")
+                flash(f"Failed to start llama-server. Check console for error: {stderr_output[:200]}...", "error")
+                return redirect(url_for('index'))
 
-        create_new_group_flags = {}
-        if os.name == 'posix':
-            create_new_group_flags['preexec_fn'] = os.setsid
-        elif os.name == 'nt':
-            create_new_group_flags['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+            new_context = {
+                "process": proc,
+                "node_id": node["id"],
+                "remote_pid": None,
+                "name": model_file,
+                "alias": alias,
+                "port": local_port,
+                "remote_port": remote_port,
+                "host": "localhost",
+                "metrics_thread_stderr": None,
+                "metrics_thread_stdout": None,
+                "metrics": {"total_requests": 0, "last_tps": 0.0, "average_tps": 0.0}
+            }
 
-        proc = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            **create_new_group_flags
-        )
+            # Start stderr reader (for metrics)
+            stderr_thread = threading.Thread(
+                target=drain_server_stderr,
+                args=(proc, new_context["metrics"]),
+                daemon=True
+            )
+            stderr_thread.start()
 
-        sleep(10)
+            # Start stdout reader
+            stdout_thread = threading.Thread(
+                target=drain_server_stdout,
+                args=(proc,),
+                daemon=True
+            )
+            stdout_thread.start()
 
-        return_code = proc.poll()
-        if return_code is not None:
-            stderr_output = proc.stderr.read()
-            logger.error(f"Failed to start llama-server. Return code: {return_code}")
-            logger.error(f"Stderr: {stderr_output}")
-            flash(f"Failed to start llama-server. Check console for error: {stderr_output[:200]}...", "error")
-            return redirect(url_for('index'))
+            llm_server_contexts[local_port] = new_context
+            new_context["metrics_thread_stderr"] = stderr_thread
+            new_context["metrics_thread_stdout"] = stdout_thread
 
-        new_context = {
-            "process": proc,
-            "name": model_file,
-            "alias": alias,
-            "port": port,
-            "metrics_thread_stderr": None,
-            "metrics_thread_stdout": None,
-            "metrics": {"total_requests": 0, "last_tps": 0.0, "average_tps": 0.0}
-        }
+            logger.info(f"llama-server started successfully on port {local_port}. PID: {proc.pid}")
+            flash(f"Successfully loaded {model_file} on port {local_port}!", "success")
+
+        else:
+            # Remote Node Loading
+            remote_port = find_remote_port(node)
+            remote_bin = str(pathlib.Path(node["llama_bin_path"]).joinpath('llama-server'))
+            log_file = f"~/LocalLLMManager/llama_server_{remote_port}.log"
+            
+            # Construct the remote llama-server run command
+            run_cmd_parts = [
+                remote_bin,
+                "-m", shlex.quote(remote_model_path),
+                "--host", "0.0.0.0",
+                "--port", str(remote_port)
+            ]
+            run_cmd_parts.extend(custom_args)
+            
+            run_cmd = " ".join(run_cmd_parts) + f" > {log_file} 2>&1 & echo $!"
+            logger.info(f"Launching remote llama-server on Node {node['id']} ({node['host']}): {run_cmd}")
+            
+            rc, stdout, stderr = run_ssh_command(node, run_cmd)
+            if rc != 0:
+                flash(f"Failed to start remote llama-server command: {stderr.strip()}", "error")
+                return redirect(url_for('index'))
+                
+            try:
+                remote_pid = int(stdout.strip())
+            except ValueError:
+                flash(f"Failed to parse remote process PID from output: {stdout}", "error")
+                return redirect(url_for('index'))
+
+            sleep(10)
+
+            # Check if remote process is still running
+            check_cmd = f"ps -p {remote_pid}"
+            rc_check, _, _ = run_ssh_command(node, check_cmd)
+            if rc_check != 0:
+                # Read remote logs to diagnose failure
+                rc_log, stdout_log, _ = run_ssh_command(node, f"tail -n 20 {log_file}")
+                logger.error(f"Remote process {remote_pid} failed to start. Logs:\n{stdout_log}")
+                flash(f"Failed to start remote llama-server. Error logs:\n{stdout_log[:300]}...", "error")
+                return redirect(url_for('index'))
+
+            # Start local streaming process for remote logs
+            log_stream_cmd = [
+                "ssh",
+                "-i", node["keyfile"],
+                "-o", "StrictHostKeyChecking=accept-new",
+                f"{node['username']}@{node['host']}",
+                f"tail -f -n +1 {log_file}"
+            ]
+            
+            proc = subprocess.Popen(
+                log_stream_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            new_context = {
+                "process": proc, # Pipe process
+                "node_id": node["id"],
+                "remote_pid": remote_pid,
+                "name": model_file,
+                "alias": alias,
+                "port": local_port,
+                "remote_port": remote_port,
+                "host": node["host"],
+                "metrics_thread_stderr": None,
+                "metrics_thread_stdout": None,
+                "metrics": {"total_requests": 0, "last_tps": 0.0, "average_tps": 0.0}
+            }
+
+            # Drain standard error to capture metrics
+            stderr_thread = threading.Thread(
+                target=drain_server_stderr,
+                args=(proc, new_context["metrics"]),
+                daemon=True
+            )
+            stderr_thread.start()
+
+            # Drain stdout
+            stdout_thread = threading.Thread(
+                target=drain_server_stdout,
+                args=(proc,),
+                daemon=True
+            )
+            stdout_thread.start()
+
+            llm_server_contexts[local_port] = new_context
+            new_context["metrics_thread_stderr"] = stderr_thread
+            new_context["metrics_thread_stdout"] = stdout_thread
+
+            logger.info(f"Remote llama-server started successfully on Node {node['id']} ({node['host']}):{remote_port}. Remote PID: {remote_pid}")
+            flash(f"Successfully loaded {model_file} on Node {node['id']} ({node['host']}) port {remote_port}!", "success")
 
         save_custom_args(model_file, custom_args_str)
 
-        # Start stderr reader (for metrics)
-        stderr_thread = threading.Thread(
-            target=drain_server_stderr,
-            args=(proc, new_context["metrics"]),
-            daemon=True
-        )
-        stderr_thread.start()
-
-        # Start stdout reader (to drain buffer)
-        stdout_thread = threading.Thread(
-            target=drain_server_stdout,
-            args=(proc,),
-            daemon=True
-        )
-        stdout_thread.start()
-
-        llm_server_contexts[port] = new_context
-        new_context["metrics_thread_stderr"] = stderr_thread
-        new_context["metrics_thread_stdout"] = stdout_thread
-
-        logger.info(f"llama-server started successfully on port {port}. PID: {proc.pid}")
-        flash(f"Successfully loaded {model_file} on port {port}!", "success")
-
     except Exception as e:
         logger.error(f"Error starting llama-server: {e}")
+        logger.error(traceback.format_exc())
         flash(f"Error starting llama-server: {e}", "error")
 
     return redirect(url_for('index'))
@@ -1311,11 +1649,24 @@ def unload_model():
     model_name = context["name"]
     stderr_thread = context["metrics_thread_stderr"]
     stdout_thread = context["metrics_thread_stdout"]
+    node_id = context.get("node_id", 0)
+    remote_pid = context.get("remote_pid")
 
-    if proc and proc.poll() is None:
+    node = next((n for n in NODES if n["id"] == node_id), None)
+
+    # 1. Kill remote process if remote
+    if node and not node["is_local"] and remote_pid:
         try:
-            logger.info(f"Attempting to stop server process {proc.pid} ({model_name})")
+            logger.info(f"Unloading remote node {node['host']} process {remote_pid}")
+            kill_cmd = f"kill {remote_pid}"
+            run_ssh_command(node, kill_cmd)
+        except Exception as e:
+            logger.error(f"Failed to kill remote llama-server process {remote_pid}: {e}")
 
+    # 2. Terminate the local process (either local server or local tail log stream)
+    if proc:
+        try:
+            logger.info(f"Attempting to stop local subprocess/log stream {proc.pid} ({model_name})")
             if os.name == 'posix':
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             elif os.name == 'nt':
@@ -1323,28 +1674,24 @@ def unload_model():
 
             try:
                 proc.wait(timeout=5)
-                logger.info(f"Process {proc.pid} terminated gracefully.")
+                logger.info(f"Subprocess {proc.pid} terminated gracefully.")
             except subprocess.TimeoutExpired:
-                logger.warning(f"Process {proc.pid} did not terminate, forcing kill")
+                logger.warning(f"Subprocess {proc.pid} did not terminate, forcing kill")
                 if os.name == 'posix':
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 elif os.name == 'nt':
                     proc.kill()
-                logger.info("Process killed.")
-
-            if stderr_thread:
-                stderr_thread.join(timeout=2)
-            if stdout_thread:
-                stdout_thread.join(timeout=2)
-
-            logger.info("Log threads joined.")
-            flash(f"Successfully unloaded {model_name}.", "success")
+                logger.info("Subprocess killed.")
         except Exception as e:
-            logger.error(f"An error occurred while unloading model {model_name}: {e}")
-            flash(f"Error unloading model: {e}", "error")
-    else:
-        logger.info("No model server process to unload.")
-        flash("No model is currently loaded.", "success")
+            logger.error(f"An error occurred while terminating process {proc.pid}: {e}")
+
+    if stderr_thread:
+        stderr_thread.join(timeout=2)
+    if stdout_thread:
+        stdout_thread.join(timeout=2)
+
+    logger.info("Log threads joined.")
+    flash(f"Successfully unloaded {model_name}.", "success")
 
     if port_to_unload in llm_server_contexts:
         del llm_server_contexts[port_to_unload]
@@ -1370,6 +1717,37 @@ def api_metrics():
     except Exception as e:
         logger.error(f"Error fetching metrics for port {port_str}: {e}")
         return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/node_models')
+def api_node_models():
+    """Returns a list of local models available on a specific node."""
+    node_id_str = request.args.get('node_id')
+    if not node_id_str:
+        return jsonify({"error": "node_id is required"}), 400
+    try:
+        node_id = int(node_id_str)
+        node = next((n for n in NODES if n["id"] == node_id), None)
+        if not node or not node.get("is_active"):
+            return jsonify({"error": "Node not found or inactive"}), 404
+            
+        if node["is_local"]:
+            return jsonify(get_local_models())
+        else:
+            cmd = (
+                f'"$HOME"/LocalLLMManager/.venv/bin/python3 -c "'
+                f'import sys, json; sys.path.append(\'$HOME/LocalLLMManager/LocalLLMManager\'); '
+                f'import app; app.MODEL_DIR=\'{node["model_dir"]}\'; '
+                f'print(json.dumps(app.get_local_models()))"'
+            )
+            rc, stdout, stderr = run_ssh_command(node, cmd)
+            if rc != 0:
+                return jsonify({"error": f"Failed to list remote models: {stderr.strip()}"}), 500
+            return Response(stdout.strip(), mimetype='application/json')
+    except ValueError:
+        return jsonify({"error": "Invalid node_id"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/llama_help')
@@ -1465,8 +1843,11 @@ def proxy_chat_completions():
     if not context:
         return jsonify({"error": f"Model '{model_name}' is not loaded."}), 404
 
-    target_port = context['port']
-    target_url = f"http://127.0.0.1:{target_port}/v1/chat/completions"
+    target_host = context.get('host', '127.0.0.1')
+    if target_host == 'localhost':
+        target_host = '127.0.0.1'
+    target_port = context.get('remote_port', context['port'])
+    target_url = f"http://{target_host}:{target_port}/v1/chat/completions"
 
     raw_data = request.get_data()
 

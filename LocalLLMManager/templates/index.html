@@ -125,6 +125,16 @@
         <div class="card">
             <h2>2. Load Model</h2>
             <form action="/load" method="POST">
+                <label for="load_node_select">Select Node:</label>
+                <select id="load_node_select" name="node_id" onchange="updateLoadModelsList(this.value)">
+                    {% for n in nodes %}
+                        <option value="{{ n.id }}" {% if not n.is_active %}disabled{% endif %}>
+                            Node {{ n.id }}: {{ n.host }} {% if n.is_local %}(Local){% endif %}
+                            {% if not n.is_active %}(Offline){% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+
                 <label for="model_file">Select a downloaded model:</label>
                 <select id="model_file" name="model_file">
                     {% for model in models %}
@@ -233,6 +243,41 @@
             checkboxes.forEach(cb => {
                 cb.checked = masterCheckbox.checked;
             });
+        }
+
+        function updateLoadModelsList(nodeId) {
+            const modelSelect = document.getElementById('model_file');
+            if (!modelSelect) return;
+            
+            modelSelect.innerHTML = '<option value="" disabled>Loading models...</option>';
+            
+            fetch('/api/node_models?node_id=' + nodeId)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to fetch models');
+                    }
+                    return response.json();
+                })
+                .then(models => {
+                    modelSelect.innerHTML = '';
+                    if (models.length === 0) {
+                        modelSelect.innerHTML = '<option value="" disabled>No models found on this node</option>';
+                    } else {
+                        models.forEach(model => {
+                            const opt = document.createElement('option');
+                            opt.value = model;
+                            opt.textContent = model;
+                            modelSelect.appendChild(opt);
+                        });
+                    }
+                    if (typeof updateCustomArgs === 'function') {
+                        updateCustomArgs();
+                    }
+                })
+                .catch(err => {
+                    console.error(err);
+                    modelSelect.innerHTML = '<option value="" disabled>Error loading models</option>';
+                });
         }
 
         // Get the modals
