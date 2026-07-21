@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Browse Local Cache - LLM Manager</title>
+    <title>Browse Top Models - LLM Manager</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script>
         (function() {
@@ -20,7 +20,8 @@
     <div class="container container-wide">
         <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
          <a href="/search_hf" class="nav-link">Search Hugging Face &raquo;</a>
-        <h1>Browse Local GGUF Model Cache</h1>
+         <a href="/manage" class="nav-link">Manage Local Models &raquo;</a>
+        <h1>Browse Top GGUF Models</h1>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}

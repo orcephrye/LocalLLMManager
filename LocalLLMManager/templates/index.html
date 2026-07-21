@@ -59,7 +59,8 @@
             {% endif %}
         </div>
 
-        <a href="/browse" class="nav-link">Browse Local Cache &raquo;</a>
+        <a href="/browse" class="nav-link">Browse Top Models &raquo;</a>
+        <a href="/manage" class="nav-link">Manage Local Models &raquo;</a>
         <a href="/search_hf" class="nav-link">Search Hugging Face &raquo;</a>
         <a href="/status" class="nav-link">Server Status &raquo;</a>
 
@@ -86,6 +87,9 @@
                         <option value="" disabled>No models found in 'models' folder</option>
                     {% endfor %}
                 </select>
+
+                <label for="model_alias">Model Alias (Optional):</label>
+                <input type="text" id="model_alias" name="model_alias" placeholder="e.g., custom-model-alias">
 
                 <div id="vram-info" style="background: var(--container-bg); padding: 10px; border-radius: 4px; margin-bottom: 1rem; border: 1px solid var(--border-color); display: none;">
                     <div style="display: flex; gap: 20px;">

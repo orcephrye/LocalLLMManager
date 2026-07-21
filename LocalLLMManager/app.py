@@ -79,7 +79,17 @@ def check_default_env():
             "# Directory to store downloaded GGUF models\n"
             "# Default: (path to LocalLLMManager/models)\n"
             "# You can override this with an absolute path if you like:\n"
-            "# MODEL_DIR=\n"
+            "# MODEL_DIR=\n\n"
+            "# --- Multi-Node Cluster Configuration ---\n"
+            "# Whether to include the local machine as Node 0 (default: true)\n"
+            "# USE_LOCAL_NODE=true\n\n"
+            "# Space-separated lists of hostnames, usernames, and SSH keyfiles\n"
+            "# NODE_HOSTNAMES=\n"
+            "# NODE_USERNAMES=\n"
+            "# NODE_KEYFILES=\n\n"
+            "# Space-separated lists matching NODE_HOSTNAMES for directories and bin paths on remote nodes\n"
+            "# REMOTE_MODEL_DIRS=\n"
+            "# REMOTE_LLAMA_BIN_PATHS=\n"
         )
         try:
             with open(env_path, 'w') as f:
@@ -94,6 +104,79 @@ load_dotenv()
 
 LLAMA_BIN_PATH = os.getenv("LLAMA_BIN_PATH", "")
 LLAMA_SERVER_CMD = str(pathlib.Path(LLAMA_BIN_PATH).joinpath('llama-server'))
+
+NODES = []
+
+def parse_space_separated_env(var_name):
+    val = os.getenv(var_name, "").strip()
+    if not val:
+        return []
+    try:
+        return shlex.split(val)
+    except ValueError as e:
+        logger.warning(f"Error parsing environment variable {var_name}: {e}")
+        return val.split()
+
+
+def load_nodes_config(use_local_node_flag=None):
+    """
+    Parses and returns the configured list of nodes.
+    A node is dict with keys: id, host, username, keyfile, model_dir, llama_bin_path, is_local.
+    """
+    nodes = []
+    
+    use_local = True
+    if use_local_node_flag is not None:
+        use_local = use_local_node_flag
+    else:
+        env_val = os.getenv("USE_LOCAL_NODE", "true").lower()
+        use_local = env_val in ("true", "1", "yes")
+
+    if use_local:
+        nodes.append({
+            "id": 0,
+            "host": "localhost",
+            "username": "",
+            "keyfile": "",
+            "model_dir": MODEL_DIR,
+            "llama_bin_path": LLAMA_BIN_PATH,
+            "is_local": True
+        })
+
+    hostnames = parse_space_separated_env("NODE_HOSTNAMES")
+    usernames = parse_space_separated_env("NODE_USERNAMES")
+    keyfiles = parse_space_separated_env("NODE_KEYFILES")
+    model_dirs = parse_space_separated_env("REMOTE_MODEL_DIRS")
+    llama_bin_paths = parse_space_separated_env("REMOTE_LLAMA_BIN_PATHS")
+
+    num_remotes = len(hostnames)
+    if not (len(usernames) == num_remotes and 
+            len(keyfiles) == num_remotes and 
+            len(model_dirs) == num_remotes and 
+            len(llama_bin_paths) == num_remotes):
+        logger.error(
+            f"Inconsistent remote nodes configuration. Hostnames: {len(hostnames)}, "
+            f"Usernames: {len(usernames)}, Keyfiles: {len(keyfiles)}, "
+            f"Model dirs: {len(model_dirs)}, Bin paths: {len(llama_bin_paths)}"
+        )
+        
+    for i in range(num_remotes):
+        username = usernames[i] if i < len(usernames) else ""
+        keyfile = keyfiles[i] if i < len(keyfiles) else ""
+        model_dir = model_dirs[i] if i < len(model_dirs) else ""
+        llama_bin_path = llama_bin_paths[i] if i < len(llama_bin_paths) else ""
+        
+        nodes.append({
+            "id": len(nodes),
+            "host": hostnames[i],
+            "username": username,
+            "keyfile": keyfile,
+            "model_dir": model_dir,
+            "llama_bin_path": llama_bin_path,
+            "is_local": False
+        })
+        
+    return nodes
 
 
 def parse_logs(log_line, metrics):
@@ -386,6 +469,146 @@ def get_local_models():
     return models
 
 
+import shutil
+
+def format_size(size_bytes):
+    if size_bytes is None:
+        return "Unknown"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
+
+
+def get_local_repos_and_files():
+    repos = {}
+    if not os.path.exists(MODEL_DIR):
+        return []
+    
+    for root, dirs, files in os.walk(MODEL_DIR):
+        # Prevent walking hidden folders like .git
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        
+        rel_dir = os.path.relpath(root, MODEL_DIR)
+        if rel_dir == '.':
+            repo_name = "Root"
+        else:
+            repo_name = rel_dir.replace(os.path.sep, '/')
+            
+        for file in files:
+            file_path = os.path.join(root, file)
+            # Resolve symlink to get actual size
+            real_path = os.path.realpath(file_path) if os.path.islink(file_path) else file_path
+            
+            size_bytes = 0
+            if os.path.exists(real_path):
+                size_bytes = os.path.getsize(real_path)
+                
+            file_entry = {
+                "name": file,
+                "rel_path": os.path.relpath(file_path, MODEL_DIR).replace(os.path.sep, '/'),
+                "abs_path": file_path,
+                "size_bytes": size_bytes,
+                "size_str": format_size(size_bytes),
+                "is_symlink": os.path.islink(file_path)
+            }
+            
+            if repo_name not in repos:
+                repos[repo_name] = {
+                    "repo_name": repo_name,
+                    "repo_path": root,
+                    "files": [],
+                    "total_size_bytes": 0
+                }
+            repos[repo_name]["files"].append(file_entry)
+            repos[repo_name]["total_size_bytes"] += size_bytes
+
+    repo_list = list(repos.values())
+    
+    for r in repo_list:
+        r["total_size_str"] = format_size(r["total_size_bytes"])
+        
+    repo_list.sort(key=lambda x: (x["repo_name"] == "Root", x["repo_name"]))
+    return repo_list
+
+
+def get_disk_space_info():
+    try:
+        total, used, free = shutil.disk_usage(MODEL_DIR)
+        return {
+            "total": format_size(total),
+            "used": format_size(used),
+            "free": format_size(free),
+            "used_pct": f"{(used / total) * 100:.1f}%" if total > 0 else "0%"
+        }
+    except Exception as e:
+        logger.error(f"Error getting disk usage: {e}")
+        return {
+            "total": "Unknown",
+            "used": "Unknown",
+            "free": "Unknown",
+            "used_pct": "0%"
+        }
+
+
+def is_path_in_model_dir(path):
+    abs_path = os.path.abspath(path)
+    abs_model_dir = os.path.abspath(MODEL_DIR)
+    return abs_path.startswith(abs_model_dir) and abs_path != abs_model_dir
+
+
+def delete_local_file(file_path):
+    try:
+        if os.path.islink(file_path):
+            real_path = os.path.realpath(file_path)
+            if os.path.exists(real_path):
+                os.remove(real_path)
+            os.remove(file_path)
+        else:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        return True, "File deleted successfully."
+    except Exception as e:
+        return False, str(e)
+
+
+def delete_local_repo(repo_dir):
+    try:
+        if not os.path.exists(repo_dir):
+            return False, "Repository directory does not exist."
+        
+        for root, dirs, files in os.walk(repo_dir, topdown=False):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if os.path.islink(file_path):
+                    real_path = os.path.realpath(file_path)
+                    if os.path.exists(real_path):
+                        os.remove(real_path)
+                    os.remove(file_path)
+                else:
+                    os.remove(file_path)
+            for d in dirs:
+                os.rmdir(os.path.join(root, d))
+        os.rmdir(repo_dir)
+        
+        # Clean up any empty parent directories up to MODEL_DIR
+        parent = os.path.dirname(repo_dir)
+        while parent and parent != MODEL_DIR and len(os.path.abspath(parent)) > len(os.path.abspath(MODEL_DIR)):
+            try:
+                if not os.listdir(parent):
+                    os.rmdir(parent)
+                    parent = os.path.dirname(parent)
+                else:
+                    break
+            except Exception:
+                break
+                
+        return True, "Repository deleted successfully."
+    except Exception as e:
+        return False, str(e)
+
+
 # --- Flask Routes ---
 @app.route('/')
 def index():
@@ -421,6 +644,60 @@ def browse_models():
         models=models,
         search_query=search_query
     )
+
+
+@app.route('/manage')
+def manage_local_models():
+    """Displays local models and files with disk usage and delete actions."""
+    repos = get_local_repos_and_files()
+    disk_info = get_disk_space_info()
+    return render_template(
+        'manage.html',
+        repos=repos,
+        disk_info=disk_info
+    )
+
+
+@app.route('/delete_file', methods=['POST'])
+def delete_file_route():
+    """Endpoint to delete a specific model file."""
+    file_path = request.form.get('file_path')
+    if not file_path:
+        flash("File path is required.", "error")
+        return redirect(url_for('manage_local_models'))
+
+    if not is_path_in_model_dir(file_path):
+        flash("Invalid file path.", "error")
+        return redirect(url_for('manage_local_models'))
+
+    success, message = delete_local_file(file_path)
+    if success:
+        flash(message, "success")
+    else:
+        flash(f"Error deleting file: {message}", "error")
+
+    return redirect(url_for('manage_local_models'))
+
+
+@app.route('/delete_repo', methods=['POST'])
+def delete_repo_route():
+    """Endpoint to delete an entire repository directory."""
+    repo_path = request.form.get('repo_path')
+    if not repo_path:
+        flash("Repository path is required.", "error")
+        return redirect(url_for('manage_local_models'))
+
+    if not is_path_in_model_dir(repo_path):
+        flash("Invalid repository path.", "error")
+        return redirect(url_for('manage_local_models'))
+
+    success, message = delete_local_repo(repo_path)
+    if success:
+        flash(message, "success")
+    else:
+        flash(f"Error deleting repository: {message}", "error")
+
+    return redirect(url_for('manage_local_models'))
 
 
 @app.route('/search_hf')
@@ -478,16 +755,13 @@ def refresh_cache():
     return redirect(url_for('browse_models'))
 
 
-@app.route('/download', methods=['POST'])
-def download_model():
-    """Handles downloading a model from Hugging Face."""
-    repo_id = request.form.get('repo_id')
-    filename = request.form.get('filename')
-    quant_tag = request.form.get('quant_tag')
-
+def download_model_from_hf(repo_id, filename=None, quant_tag=None):
+    """
+    Downloads a GGUF model and its companion mmproj files from Hugging Face.
+    Returns (success, filename_or_error, mmproj_filename_or_None)
+    """
     if not repo_id:
-        flash("Repo ID is required.", "error")
-        return redirect(url_for('index'))
+        return False, "Repo ID is required.", None
 
     try:
         api = HfApi()
@@ -503,9 +777,7 @@ def download_model():
                         matching_files.append(rfile)
             
             if not matching_files:
-                flash(f"No GGUF file matching quantization tag '{quant_tag}' found in repo '{repo_id}'.", "error")
-                referrer = request.referrer
-                return redirect(referrer or url_for('index'))
+                return False, f"No GGUF file matching quantization tag '{quant_tag}' found in repo '{repo_id}'.", None
             
             # Select the first matching file, preferring exact casing if present
             filename = matching_files[0]
@@ -515,8 +787,7 @@ def download_model():
                     break
 
         if not filename:
-            flash("Filename or Quant Tag is required.", "error")
-            return redirect(url_for('index'))
+            return False, "Filename or Quant Tag is required.", None
 
         target_dir = os.path.join(MODEL_DIR, repo_id)
         os.makedirs(target_dir, exist_ok=True)
@@ -575,13 +846,32 @@ def download_model():
             logger.warning(f"Could not check or download mmproj file: {mm_err}")
 
         logger.info("Download complete.")
-        if mmproj_filename:
-            flash(f"Successfully downloaded {filename} and {os.path.basename(mmproj_filename)}!", "success")
-        else:
-            flash(f"Successfully downloaded {filename}!", "success")
+        return True, filename, mmproj_filename
+
     except Exception as e:
         logger.error(f"Error downloading model: {e}")
-        flash(f"Error downloading model: {e}", "error")
+        return False, str(e), None
+
+
+@app.route('/download', methods=['POST'])
+def download_model():
+    """Handles downloading a model from Hugging Face."""
+    repo_id = request.form.get('repo_id')
+    filename = request.form.get('filename')
+    quant_tag = request.form.get('quant_tag')
+
+    if not repo_id:
+        flash("Repo ID is required.", "error")
+        return redirect(url_for('index'))
+
+    success, result, mmproj_filename = download_model_from_hf(repo_id, filename, quant_tag)
+    if success:
+        if mmproj_filename:
+            flash(f"Successfully downloaded {result} and {os.path.basename(mmproj_filename)}!", "success")
+        else:
+            flash(f"Successfully downloaded {result}!", "success")
+    else:
+        flash(f"Error downloading model: {result}", "error")
 
     referrer = request.referrer
     if referrer:
@@ -594,6 +884,7 @@ def download_model():
 def load_model():
     """Handles loading a GGUF model by starting a llama-server subprocess."""
     model_file = request.form.get('model_file')
+    model_alias = request.form.get('model_alias', '').strip()
     custom_args_str = request.form.get('custom_args', '')
 
     if not model_file:
@@ -615,7 +906,8 @@ def load_model():
         '-hfv', '-hfrv', '--hf-repo-v',
         '-hffv', '--hf-file-v',
         '--log-disable', '--log-file',
-        '--host', '--port', '--api-prefix', '--no-webui'
+        '--host', '--port', '--api-prefix', '--no-webui',
+        '-a', '--alias'
     }
 
     custom_args = []
@@ -665,8 +957,9 @@ def load_model():
         if '-ngl' not in custom_args and '--n-gpu-layers' not in custom_args:
             custom_args.extend(['-ngl', "-1"])
 
-        if '-a' not in custom_args and '--alias' not in custom_args:
-            custom_args.extend(["-a", model_file])
+        # Determine the alias to use
+        alias = model_alias if model_alias else model_file
+        custom_args.extend(["-a", alias])
 
         command.extend(custom_args)
 
@@ -695,12 +988,6 @@ def load_model():
             logger.error(f"Stderr: {stderr_output}")
             flash(f"Failed to start llama-server. Check console for error: {stderr_output[:200]}...", "error")
             return redirect(url_for('index'))
-
-        alias = model_file
-        if "-a" in custom_args:
-            alias = custom_args[custom_args.index("-a") + 1]
-        elif "--alias" in custom_args:
-            alias = custom_args[custom_args.index("--alias") + 1]
 
         new_context = {
             "process": proc,
@@ -1015,6 +1302,24 @@ if __name__ == '__main__':
         help="Print the absolute path to the app directory and exit."
     )
     parser.add_argument(
+        '--download-repo-id', '--repo-id',
+        dest='download_repo_id',
+        type=str,
+        help="Hugging Face repository ID to download a GGUF model from, then exit."
+    )
+    parser.add_argument(
+        '--download-file', '--filename',
+        dest='download_file',
+        type=str,
+        help="GGUF filename to download (used with --download-repo-id)."
+    )
+    parser.add_argument(
+        '--download-quant-tag', '--quant-tag',
+        dest='download_quant_tag',
+        type=str,
+        help="Quantization tag to filter and download (used with --download-repo-id if filename not specified)."
+    )
+    parser.add_argument(
         '--proxy-host', type=str, default=default_proxy_host,
         help=f"The host for the OpenAI Proxy. (Env: PROXY_HOST, Default: {default_proxy_host})"
     )
@@ -1028,12 +1333,21 @@ if __name__ == '__main__':
         default=default_model_dir,
         help=f"Directory to store models. (Env: MODEL_DIR, Default: {default_model_dir})"
     )
+    parser.add_argument(
+        '--use-local-node',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Specify whether the app can use the local instance as a node. (Default: True, or USE_LOCAL_NODE env var)"
+    )
     args = parser.parse_args()
 
     MODEL_DIR = os.path.abspath(args.model_dir)
 
     # Create the directory if it doesn't exist
     os.makedirs(MODEL_DIR, exist_ok=True)
+
+    global NODES
+    NODES = load_nodes_config(args.use_local_node)
 
     if args.print_model_dir_path:
         print(os.path.abspath(MODEL_DIR))
@@ -1051,6 +1365,26 @@ if __name__ == '__main__':
     )
     if not args.verbose:
         logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+    logger.info(f"Loaded {len(NODES)} nodes configuration:")
+    for node in NODES:
+        logger.info(f"  Node {node['id']}: {node['host']} (Local: {node['is_local']})")
+
+    if args.download_repo_id:
+        success, result, mmproj_filename = download_model_from_hf(
+            repo_id=args.download_repo_id,
+            filename=args.download_file,
+            quant_tag=args.download_quant_tag
+        )
+        if success:
+            if mmproj_filename:
+                print(f"SUCCESS: Successfully downloaded {result} and {os.path.basename(mmproj_filename)}!")
+            else:
+                print(f"SUCCESS: Successfully downloaded {result}!")
+            sys.exit(0)
+        else:
+            print(f"ERROR: {result}", file=sys.stderr)
+            sys.exit(1)
 
     init_db()
 
