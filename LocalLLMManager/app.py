@@ -296,7 +296,7 @@ def setup_remote_node(node):
         'if [ ! -d "$HOME/LocalLLMManager" ]; then '
         'git clone https://github.com/orcephrye/LocalLLMManager.git "$HOME"/LocalLLMManager; '
         'else '
-        'echo "Repository already exists."; '
+        'cd "$HOME"/LocalLLMManager && git reset --hard HEAD && git pull; '
         'fi'
     )
     rc, stdout, stderr = run_ssh_command(node, clone_cmd)
