@@ -23,6 +23,28 @@
          <a href="/manage" class="nav-link">Manage Local Models &raquo;</a>
         <h1>Browse Top GGUF Models</h1>
 
+        <!-- Centralized Target Node Selector -->
+        <div class="card" style="margin-bottom: 1.5rem; padding: 1.25rem 1.5rem;">
+            <h3 style="margin-bottom: 0.75rem; font-size: 1.1rem; font-weight: 600;">Download Target Nodes</h3>
+            <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center;">
+                <label style="font-weight: normal; display: flex; align-items: center; gap: 8px; margin-bottom: 0; cursor: pointer;">
+                    <input type="checkbox" id="download_all_nodes" onchange="toggleAllNodes(this)">
+                    <strong>Select All Active Nodes</strong>
+                </label>
+                {% for node in nodes %}
+                    <label style="font-weight: normal; display: flex; align-items: center; gap: 8px; margin-bottom: 0; cursor: {% if node.is_active %}pointer{% else %}not-allowed{% endif %}; {% if not node.is_active %}opacity: 0.5;{% endif %}">
+                        <input type="checkbox" class="node-download-checkbox" name="global_node_ids" value="{{ node.id }}" {% if not node.is_active %}disabled{% elif node.is_local %}checked{% endif %}>
+                        Node {{ node.id }}: {{ node.host }} {% if node.is_local %}(Local){% endif %}
+                        {% if not node.is_active %}
+                            <span style="color: var(--flash-error-text); font-size: 0.8rem;">(Offline: {{ node.status_msg }})</span>
+                        {% else %}
+                            <span style="color: var(--secondary-color); font-size: 0.8rem;">(Active)</span>
+                        {% endif %}
+                    </label>
+                {% endfor %}
+            </div>
+        </div>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             {% for category, message in messages %}
@@ -97,10 +119,33 @@
         var downloadForms = document.querySelectorAll(".download-form");
         var refreshCacheForm = document.getElementById("refreshCacheForm");
 
-        // When the user clicks on a download button, open the modal
+        function toggleAllNodes(masterCheckbox) {
+            const checkboxes = document.querySelectorAll('.node-download-checkbox:not([disabled])');
+            checkboxes.forEach(cb => {
+                cb.checked = masterCheckbox.checked;
+            });
+        }
+
+        // When the user clicks on a download button, append selected nodes and open the modal
         downloadForms.forEach(function(form) {
             form.addEventListener("submit", function(event) {
-                modalMessage.textContent = "Downloading model... Please wait.";
+                const checkedCheckboxes = document.querySelectorAll('.node-download-checkbox:checked');
+                if (checkedCheckboxes.length === 0) {
+                    alert("Please select at least one active target node for the download.");
+                    event.preventDefault();
+                    return;
+                }
+                
+                // Append node_ids to this form
+                checkedCheckboxes.forEach(cb => {
+                    const hiddenInput = document.createElement('input');
+                    hiddenInput.type = 'hidden';
+                    hiddenInput.name = 'node_ids';
+                    hiddenInput.value = cb.value;
+                    form.appendChild(hiddenInput);
+                });
+
+                modalMessage.textContent = "Initiating download task... Redirecting to Model Manager.";
                 modal.style.display = "block";
             });
         });

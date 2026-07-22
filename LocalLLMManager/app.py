@@ -907,7 +907,8 @@ def browse_models():
     return render_template(
         'browse.html',
         models=models,
-        search_query=search_query
+        search_query=search_query,
+        nodes=NODES
     )
 
 
@@ -1088,7 +1089,8 @@ def search_hf_models():
     return render_template(
         'search.html',
         models=models,
-        search_query=search_query
+        search_query=search_query,
+        nodes=NODES
     )
 
 
@@ -1105,7 +1107,8 @@ def list_files_route():
     return render_template(
         'list_files.html',
         repo_id=repo_id,
-        gguf_files=gguf_files
+        gguf_files=gguf_files,
+        nodes=NODES
     )
 
 
@@ -1333,11 +1336,20 @@ def download_model():
     else:
         flash("Failed to start downloads. Ensure selected nodes are active.", "error")
 
-    referrer = request.referrer
-    if referrer:
-        return redirect(referrer)
-    else:
-        return redirect(url_for('index'))
+    return redirect(url_for('index'))
+
+
+@app.route('/clear_downloads', methods=['POST'])
+def clear_downloads():
+    """Clears completed and failed background download tasks from the list."""
+    keys_to_remove = [
+        k for k, v in background_downloads.items() 
+        if v["status"] in ("Completed", "Failed")
+    ]
+    for k in keys_to_remove:
+        del background_downloads[k]
+    flash("Cleared completed and failed download tasks.", "success")
+    return redirect(url_for('index'))
 
 
 @app.route('/load', methods=['POST'])
@@ -1446,15 +1458,14 @@ def load_model():
     custom_args.extend(["-a", alias])
 
     try:
-        local_port = find_next_available_port(STARTING_PORT)
-        
         if node["is_local"]:
-            remote_port = local_port
+            remote_port = find_next_available_port(STARTING_PORT)
+            host = "localhost"
             command = [
                 LLAMA_SERVER_CMD,
                 "-m", model_path,
                 "--host", "0.0.0.0",
-                "--port", str(local_port)
+                "--port", str(remote_port)
             ]
             command.extend(custom_args)
 
@@ -1490,9 +1501,8 @@ def load_model():
                 "remote_pid": None,
                 "name": model_file,
                 "alias": alias,
-                "port": local_port,
-                "remote_port": remote_port,
-                "host": "localhost",
+                "port": remote_port,
+                "host": host,
                 "metrics_thread_stderr": None,
                 "metrics_thread_stdout": None,
                 "metrics": {"total_requests": 0, "last_tps": 0.0, "average_tps": 0.0}
@@ -1514,12 +1524,12 @@ def load_model():
             )
             stdout_thread.start()
 
-            llm_server_contexts[local_port] = new_context
+            llm_server_contexts[remote_port] = new_context
             new_context["metrics_thread_stderr"] = stderr_thread
             new_context["metrics_thread_stdout"] = stdout_thread
 
-            logger.info(f"llama-server started successfully on port {local_port}. PID: {proc.pid}")
-            flash(f"Successfully loaded {model_file} on port {local_port}!", "success")
+            logger.info(f"llama-server started successfully on port {remote_port}. PID: {proc.pid}")
+            flash(f"Successfully loaded {model_file} on port {remote_port}!", "success")
 
         else:
             # Remote Node Loading
@@ -1584,8 +1594,7 @@ def load_model():
                 "remote_pid": remote_pid,
                 "name": model_file,
                 "alias": alias,
-                "port": local_port,
-                "remote_port": remote_port,
+                "port": remote_port,
                 "host": node["host"],
                 "metrics_thread_stderr": None,
                 "metrics_thread_stdout": None,
@@ -1608,7 +1617,7 @@ def load_model():
             )
             stdout_thread.start()
 
-            llm_server_contexts[local_port] = new_context
+            llm_server_contexts[remote_port] = new_context
             new_context["metrics_thread_stderr"] = stderr_thread
             new_context["metrics_thread_stdout"] = stdout_thread
 
@@ -1658,7 +1667,7 @@ def unload_model():
     if node and not node["is_local"] and remote_pid:
         try:
             logger.info(f"Unloading remote node {node['host']} process {remote_pid}")
-            kill_cmd = f"kill {remote_pid}"
+            kill_cmd = f"kill -9 {remote_pid}"
             run_ssh_command(node, kill_cmd)
         except Exception as e:
             logger.error(f"Failed to kill remote llama-server process {remote_pid}: {e}")
@@ -1668,7 +1677,10 @@ def unload_model():
         try:
             logger.info(f"Attempting to stop local subprocess/log stream {proc.pid} ({model_name})")
             if os.name == 'posix':
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                if 'ssh' in proc.args[0]:
+                    os.kill(proc.pid, signal.SIGTERM)
+                else:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             elif os.name == 'nt':
                 os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
 
@@ -1678,7 +1690,11 @@ def unload_model():
             except subprocess.TimeoutExpired:
                 logger.warning(f"Subprocess {proc.pid} did not terminate, forcing kill")
                 if os.name == 'posix':
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    if os.name == 'posix':
+                        if 'ssh' in proc.args[0]:
+                            os.kill(proc.pid, signal.SIGTERM)
+                        else:
+                            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
                 elif os.name == 'nt':
                     proc.kill()
                 logger.info("Subprocess killed.")
@@ -1846,7 +1862,7 @@ def proxy_chat_completions():
     target_host = context.get('host', '127.0.0.1')
     if target_host == 'localhost':
         target_host = '127.0.0.1'
-    target_port = context.get('remote_port', context['port'])
+    target_port = context.get(context['port'], 8100)
     target_url = f"http://{target_host}:{target_port}/v1/chat/completions"
 
     raw_data = request.get_data()
