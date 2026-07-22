@@ -1862,7 +1862,7 @@ def proxy_chat_completions():
     target_host = context.get('host', '127.0.0.1')
     if target_host == 'localhost':
         target_host = '127.0.0.1'
-    target_port = context.get(context['port'], 8100)
+    target_port = context.get('port', 8100)
     target_url = f"http://{target_host}:{target_port}/v1/chat/completions"
 
     raw_data = request.get_data()

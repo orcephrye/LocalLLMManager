@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Local Models - LLM Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <style>
+        .disk-usage-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        .disk-stat {
+            flex: 1;
+            min-width: 150px;
+            text-align: center;
+        }
+        .disk-stat-val {
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin-top: 5px;
+            color: var(--primary-color);
+        }
+        .progress-bar-bg {
+            width: 100%;
+            height: 10px;
+            background-color: var(--border-color);
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+        }
+        .repo-card {
+            background: var(--container-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px var(--shadow-color);
+            overflow: hidden;
+        }
+        .repo-header {
+            background: var(--card-bg);
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .repo-title-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .repo-icon {
+            font-size: 1.4rem;
+        }
+        .repo-name {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-color);
+        }
+        .repo-size {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            background: var(--border-color);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        .file-list {
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+        .file-item {
+            padding: 1rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-width: 70%;
+        }
+        .file-name {
+            font-weight: 500;
+            word-break: break-all;
+            color: var(--text-color);
+        }
+        .file-meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .tag {
+            font-size: 0.75rem;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .tag-symlink {
+            background-color: #dbeafe;
+            color: #1e40af;
+        }
+        [data-theme="dark"] .tag-symlink {
+            background-color: #1e3a8a;
+            color: #93c5fd;
+        }
+        .button-delete {
+            background-color: #ef4444;
+            box-shadow: 0 4px 10px rgba(239, 68, 68, 0.2);
+        }
+        .button-delete:hover {
+            background-color: #dc2626;
+            box-shadow: 0 6px 14px rgba(239, 68, 68, 0.3);
+        }
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+        .empty-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme">
+        <span class="theme-toggle-icon">🌙</span>
+    </button>
+    <div class="container container-wide">
+        <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
+        <a href="/browse" class="nav-link">Browse Top Models &raquo;</a>
+
+        <h1>Manage Local Models & Files</h1>
+
+        <div class="card" style="margin-bottom: 1.5rem; display: flex; flex-direction: column; gap: 8px;">
+            <label for="node_select" style="font-weight: 600; margin-bottom: 0;">Select Node to Manage:</label>
+            <select id="node_select" name="node_id" onchange="window.location.href='/manage?node_id='+this.value" style="width: 100%; max-width: 400px; padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-color);">
+                {% for n in nodes %}
+                    <option value="{{ n.id }}" {% if n.id == selected_node_id %}selected{% endif %} {% if not n.is_active %}disabled{% endif %}>
+                        Node {{ n.id }}: {{ n.host }} {% if n.is_local %}(Local){% endif %}
+                        {% if not n.is_active %}(Offline){% endif %}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <!-- Disk Usage Summary -->
+        <div class="disk-usage-container">
+            <div class="disk-stat">
+                <div>Total Disk Space</div>
+                <div class="disk-stat-val">{{ disk_info.total }}</div>
+            </div>
+            <div class="disk-stat">
+                <div>Used Space</div>
+                <div class="disk-stat-val">{{ disk_info.used }}</div>
+            </div>
+            <div class="disk-stat">
+                <div>Free Space</div>
+                <div class="disk-stat-val">{{ disk_info.free }}</div>
+            </div>
+            <div style="width: 100%;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--text-muted);">
+                    <span>Storage Usage</span>
+                    <span>{{ disk_info.used_pct }}</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" style="width: {{ disk_info.used_pct }};"></div>
+                </div>
+            </div>
+        </div>
+
+        <h2>Downloaded Repositories</h2>
+
+        {% if repos %}
+            {% for repo in repos %}
+                {% if repo.files %}
+                    <div class="repo-card">
+                        <div class="repo-header">
+                            <div class="repo-title-group">
+                                <span class="repo-icon">📂</span>
+                                <span class="repo-name">{{ repo.repo_name }}</span>
+                                <span class="repo-size">{{ repo.total_size_str }}</span>
+                            </div>
+                            
+                            {% if repo.repo_name != "Root" %}
+                                <form action="/delete_repo" method="POST" onsubmit="return confirm('Are you sure you want to delete the repository &quot;{{ repo.repo_name }}&quot; and all of its files? This cannot be undone.');" style="margin: 0;">
+                                    <input type="hidden" name="node_id" value="{{ selected_node_id }}">
+                                    <input type="hidden" name="repo_path" value="{{ repo.repo_path }}">
+                                    <button type="submit" class="button-small button-delete">Delete Repo</button>
+                                </form>
+                            {% endif %}
+                        </div>
+                        <ul class="file-list">
+                            {% for file in repo.files %}
+                                <li class="file-item">
+                                    <div class="file-info">
+                                        <span class="file-name">{{ file.name }}</span>
+                                        <div class="file-meta">
+                                            <span>{{ file.size_str }}</span>
+                                            {% if file.is_symlink %}
+                                                <span class="tag tag-symlink">Symlink</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <form action="/delete_file" method="POST" onsubmit="return confirm('Are you sure you want to delete &quot;{{ file.name }}&quot;? This cannot be undone.');" style="margin: 0;">
+                                        <input type="hidden" name="node_id" value="{{ selected_node_id }}">
+                                        <input type="hidden" name="file_path" value="{{ file.abs_path }}">
+                                        <button type="submit" class="button-small button-delete">Delete</button>
+                                    </form>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            <div class="repo-card empty-state">
+                <div class="empty-icon">📭</div>
+                <p>No downloaded models or companion files found in the models folder.</p>
+                <a href="/search_hf" class="button" style="margin-top: 1rem;">Download a Model</a>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
