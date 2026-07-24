@@ -472,7 +472,7 @@ def validate_node(node):
         device_dicts = get_node_devices(node)
         if len(device_dicts) < 1:
             return False, "No active acceleration/compute devices found on the remote node (zero devices)."
-        devices = [d["device"] for d in device_dicts]
+        devices = [d["device_name"] for d in device_dicts]
     except Exception as e:
         return False, f"Failed to list devices on remote node: {e}"
 
