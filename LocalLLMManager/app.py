@@ -100,7 +100,7 @@ def check_default_env():
 
 
 check_default_env()
-load_dotenv()
+load_dotenv(os.path.join(APP_DIR, '.env'))
 
 LLAMA_BIN_PATH = os.getenv("LLAMA_BIN_PATH", "")
 LLAMA_SERVER_CMD = str(pathlib.Path(LLAMA_BIN_PATH).joinpath('llama-server'))
@@ -332,6 +332,107 @@ def setup_remote_node(node):
     return True, "Remote node setup completed successfully."
 
 
+def parse_device_line(line):
+    """
+    Parses a single device line from 'llama-server --list-devices'.
+    Returns a dict with 'device_id', 'device_name', 'memory_info', and 'raw'.
+    
+    Example input:
+      "Vulkan0: AMD Radeon 890M Graphics (RADV STRIX1) (24266 MiB, 21575 MiB free)"
+    Output:
+      {
+        "device_id": "Vulkan0",
+        "device_name": "AMD Radeon 890M Graphics (RADV STRIX1)",
+        "memory_info": "24266 MiB, 21575 MiB free",
+        "raw": "Vulkan0: AMD Radeon 890M Graphics (RADV STRIX1) (24266 MiB, 21575 MiB free)"
+      }
+    """
+    if ":" not in line:
+        return None
+    device_id, rest = line.split(":", 1)
+    device_id = device_id.strip()
+    rest = rest.strip()
+    
+    match = re.match(r"^(.*?)\s*\(([^()]*?(?:MiB|GiB|MB|GB|B|free|total|used|RAM)[^()]*?)\)$", rest, re.IGNORECASE)
+    if not match:
+        match = re.match(r"^(.*?)\s*\(([^()]+)\)$", rest)
+
+    if match:
+        dev_name = match.group(1).strip()
+        mem_info = match.group(2).strip()
+    else:
+        dev_name = rest
+        mem_info = "N/A"
+        
+    if not dev_name:
+        dev_name = device_id
+
+    return {
+        "device_id": device_id,
+        "device_name": dev_name,
+        "memory_info": mem_info,
+        "raw": line.strip()
+    }
+
+
+def get_node_devices(node_or_id):
+    """
+    Retrieves compute/acceleration devices seen by llama-server via 'llama-server --list-devices' on a specific node.
+    Accepts either a node dictionary or node_id (int or str).
+    
+    Returns a list of dicts:
+        [
+            {
+                "device_id": "Vulkan0",
+                "device_name": "AMD Radeon 890M Graphics (RADV STRIX1)",
+                "memory_info": "24266 MiB, 21575 MiB free",
+                "raw": "Vulkan0: AMD Radeon 890M Graphics (RADV STRIX1) (24266 MiB, 21575 MiB free)"
+            },
+            ...
+        ]
+    """
+    if isinstance(node_or_id, dict):
+        node = node_or_id
+    else:
+        try:
+            nid = int(node_or_id)
+            nodes = load_nodes_config()
+            node = next((n for n in nodes if n["id"] == nid), None)
+        except (ValueError, TypeError):
+            node = None
+
+    if not node:
+        raise ValueError(f"Node '{node_or_id}' not found.")
+
+    llama_bin = node.get("llama_bin_path", "")
+    if llama_bin:
+        llama_server_cmd = str(pathlib.Path(llama_bin).joinpath("llama-server"))
+    else:
+        llama_server_cmd = "llama-server"
+
+    devices_cmd = f"{llama_server_cmd} --list-devices"
+    rc, stdout, stderr = run_ssh_command(node, devices_cmd)
+
+    if rc != 0:
+        raise RuntimeError(f"Failed to list devices on node {node['id']} ({node['host']}): {stderr.strip()}")
+
+    devices = []
+    found_header = False
+    for line in stdout.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        if "Available devices:" in line_str:
+            found_header = True
+            continue
+        if found_header:
+            parsed = parse_device_line(line_str)
+            if parsed:
+                devices.append(parsed)
+
+    return devices
+
+
 def validate_node(node):
     """
     Validates a node configuration.
@@ -366,25 +467,14 @@ def validate_node(node):
             return False, f"Remote code sync failed: {sync_msg}"
 
     # 3. Verify llama-server --list-devices
-    llama_server_cmd = str(pathlib.Path(node["llama_bin_path"]).joinpath('llama-server'))
-    devices_cmd = f"{llama_server_cmd} --list-devices"
-    rc_dev, stdout_dev, stderr_dev = run_ssh_command(node, devices_cmd)
-    if rc_dev != 0:
-        return False, f"Failed to list devices on remote node: {stderr_dev.strip()}"
-
-    # Parse devices
-    lines = [line.strip() for line in stdout_dev.split('\n') if line.strip()]
     devices = []
-    found_header = False
-    for line in lines:
-        if "Available devices:" in line:
-            found_header = True
-            continue
-        if found_header:
-            devices.append(line)
-            
-    if len(devices) < 1:
-        return False, "No active acceleration/compute devices found on the remote node (zero devices)."
+    try:
+        device_dicts = get_node_devices(node)
+        if len(device_dicts) < 1:
+            return False, "No active acceleration/compute devices found on the remote node (zero devices)."
+        devices = [d["device"] for d in device_dicts]
+    except Exception as e:
+        return False, f"Failed to list devices on remote node: {e}"
 
     # 4. Verify remote app.py --help can run
     help_cmd = '"$HOME"/LocalLLMManager/.venv/bin/python3 "$HOME"/LocalLLMManager/LocalLLMManager/app.py --help'
@@ -1793,6 +1883,214 @@ def api_llama_help():
         # Catch any other potential errors
         logger.error(f"Error getting llama-server help: {e}")
         return jsonify({"help_text": f"An unknown error occurred: {e}"}), 500
+
+
+@app.route('/api/node_devices')
+def api_node_devices():
+    """Returns a list of devices visible to llama-server on a specific node."""
+    node_id_str = request.args.get('node_id', '0')
+    try:
+        devices = get_node_devices(node_id_str)
+        return jsonify({"node_id": node_id_str, "devices": devices})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def update_nodes_env(remote_nodes):
+    """
+    Rewrites the remote node environment variables in .env.
+    remote_nodes is a list of node dicts (excluding local node 0).
+    """
+    env_path = os.path.join(APP_DIR, '.env')
+    
+    hostnames = [n["host"] for n in remote_nodes]
+    usernames = [n["username"] for n in remote_nodes]
+    keyfiles = [n["keyfile"] for n in remote_nodes]
+    model_dirs = [n["model_dir"] for n in remote_nodes]
+    llama_bin_paths = [n["llama_bin_path"] for n in remote_nodes]
+    
+    new_vars = {
+        "NODE_HOSTNAMES": shlex.join(hostnames),
+        "NODE_USERNAMES": shlex.join(usernames),
+        "NODE_KEYFILES": shlex.join(keyfiles),
+        "REMOTE_MODEL_DIRS": shlex.join(model_dirs),
+        "REMOTE_LLAMA_BIN_PATHS": shlex.join(llama_bin_paths)
+    }
+    
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+            
+    keys_updated = set()
+    new_lines = []
+    
+    for line in lines:
+        line_stripped = line.strip()
+        matched_key = None
+        for key in new_vars:
+            if line_stripped.startswith(f"{key}=") or line_stripped.startswith(f"# {key}="):
+                matched_key = key
+                break
+        if matched_key:
+            new_lines.append(f"{matched_key}={new_vars[matched_key]}\n")
+            keys_updated.add(matched_key)
+        else:
+            new_lines.append(line)
+            
+    for key, val in new_vars.items():
+        if key not in keys_updated:
+            new_lines.append(f"{key}={val}\n")
+            
+    with open(env_path, 'w') as f:
+        f.writelines(new_lines)
+        
+    load_dotenv(env_path, override=True)
+
+
+@app.route('/nodes')
+def manage_nodes():
+    """Renders the node management page."""
+    for node in NODES:
+        if "is_active" not in node:
+            is_valid, msg = validate_node(node)
+            node["is_active"] = is_valid
+            node["status_msg"] = msg
+    return render_template('nodes.html', nodes=NODES)
+
+
+@app.route('/nodes/add', methods=['POST'])
+def add_node_route():
+    global NODES
+    host = request.form.get('host', '').strip()
+    username = request.form.get('username', '').strip()
+    keyfile = request.form.get('keyfile', '').strip()
+    model_dir = request.form.get('model_dir', '').strip()
+    llama_bin_path = request.form.get('llama_bin_path', '').strip()
+
+    if not host or not username or not keyfile or not model_dir or not llama_bin_path:
+        flash("All 5 fields (Hostname, Username, SSH Key File, Model Directory, Llama Bin Path) are required.", "error")
+        return redirect(url_for('manage_nodes'))
+
+    current_nodes = load_nodes_config()
+    remote_nodes = [n for n in current_nodes if not n["is_local"]]
+
+    if any(n["host"] == host for n in remote_nodes):
+        flash(f"Node with host '{host}' already exists.", "error")
+        return redirect(url_for('manage_nodes'))
+
+    new_node = {
+        "id": len(current_nodes),
+        "host": host,
+        "username": username,
+        "keyfile": keyfile,
+        "model_dir": model_dir,
+        "llama_bin_path": llama_bin_path,
+        "is_local": False
+    }
+
+    is_valid, status_msg = validate_node(new_node)
+    if not is_valid:
+        flash(f"Failed to add node '{host}': {status_msg}", "error")
+        return redirect(url_for('manage_nodes'))
+
+    remote_nodes.append(new_node)
+    update_nodes_env(remote_nodes)
+
+    NODES = load_nodes_config()
+    for n in NODES:
+        is_v, m = validate_node(n)
+        n["is_active"] = is_v
+        n["status_msg"] = m
+
+    flash(f"Successfully added node '{host}'! Status: {status_msg}", "success")
+    return redirect(url_for('manage_nodes'))
+
+
+@app.route('/nodes/remove', methods=['POST'])
+def remove_node_route():
+    global NODES
+    node_id_str = request.form.get('node_id', '')
+    try:
+        node_id = int(node_id_str)
+    except ValueError:
+        flash("Invalid node ID.", "error")
+        return redirect(url_for('manage_nodes'))
+
+    current_nodes = load_nodes_config()
+    target_node = next((n for n in current_nodes if n["id"] == node_id), None)
+    if not target_node:
+        flash("Node not found.", "error")
+        return redirect(url_for('manage_nodes'))
+
+    if target_node["is_local"]:
+        flash("Cannot remove the local node (Node 0).", "error")
+        return redirect(url_for('manage_nodes'))
+
+    remote_nodes = [n for n in current_nodes if not n["is_local"] and n["id"] != node_id]
+    update_nodes_env(remote_nodes)
+
+    NODES = load_nodes_config()
+    for n in NODES:
+        is_v, m = validate_node(n)
+        n["is_active"] = is_v
+        n["status_msg"] = m
+
+    flash(f"Successfully removed node {target_node['id']} ({target_node['host']}).", "success")
+    return redirect(url_for('manage_nodes'))
+
+
+@app.route('/api/nodes/test_connection', methods=['POST'])
+def api_test_node_connection():
+    data = request.get_json() or {}
+    host = data.get('host', '').strip()
+    username = data.get('username', '').strip()
+    keyfile = data.get('keyfile', '').strip()
+    
+    if not host or not username or not keyfile:
+        return jsonify({"success": False, "error": "Hostname, Username, and SSH Key File are required."}), 400
+        
+    temp_node = {
+        "is_local": False,
+        "host": host,
+        "username": username,
+        "keyfile": keyfile
+    }
+    
+    rc, stdout, stderr = run_ssh_command(temp_node, "echo 'ping'", timeout=10)
+    if rc == 0:
+        return jsonify({"success": True, "message": f"Successfully connected to {username}@{host} via SSH!"})
+    else:
+        return jsonify({"success": False, "error": f"SSH connection failed: {stderr.strip() or stdout.strip()}"})
+
+
+@app.route('/api/nodes_devices')
+def api_nodes_devices():
+    """Returns a list of all configured nodes and their compute/acceleration devices."""
+    nodes_info = []
+    nodes = load_nodes_config()
+    for n in nodes:
+        node_entry = {
+            "id": n["id"],
+            "host": n["host"],
+            "is_local": n["is_local"],
+            "is_active": True,
+            "status_msg": "Active",
+            "devices": []
+        }
+        try:
+            node_entry["devices"] = get_node_devices(n)
+        except Exception as e:
+            node_entry["is_active"] = False
+            node_entry["status_msg"] = str(e)
+            node_entry["devices"] = []
+        nodes_info.append(node_entry)
+        
+    return jsonify({"nodes": nodes_info})
 
 
 @app.route('/api/estimate_vram')

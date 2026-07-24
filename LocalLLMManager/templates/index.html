@@ -60,9 +60,10 @@
         </div>
 
         <a href="/browse" class="nav-link">Browse Top Models &raquo;</a>
-        <a href="/manage" class="nav-link">Manage Local Models &raquo;</a>
-        <a href="/search_hf" class="nav-link">Search Hugging Face &raquo;</a>
-        <a href="/status" class="nav-link">Server Status &raquo;</a>
+        <a href="/manage" class="nav-link">Manage Models &raquo;</a>
+        <a href="/nodes" class="nav-link">Manage Nodes &raquo;</a>
+        <a href="/search_hf" class="nav-link">Search HF &raquo;</a>
+        <a href="/status" class="nav-link">Status &raquo;</a>
 
 
         <div class="card" style="padding: 0;">
@@ -132,45 +133,68 @@
             </div>
         </div>
 
-        <div class="card">
-            <h2>2. Load Model</h2>
-            <form action="/load" method="POST">
-                <label for="load_node_select">Select Node:</label>
-                <select id="load_node_select" name="node_id" onchange="updateLoadModelsList(this.value)">
-                    {% for n in nodes %}
-                        <option value="{{ n.id }}" {% if not n.is_active %}disabled{% endif %}>
-                            Node {{ n.id }}: {{ n.host }} {% if n.is_local %}(Local){% endif %}
-                            {% if not n.is_active %}(Offline){% endif %}
-                        </option>
-                    {% endfor %}
-                </select>
+        <div class="card" style="padding: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem; cursor: pointer; user-select: none;" onclick="toggleLoadCard()">
+                <h2 style="margin: 0;">2. Load Model</h2>
+                <span id="load-toggle-icon" style="font-size: 1.25rem; transition: transform 0.3s; color: var(--text-muted); display: inline-block;">▼</span>
+            </div>
+            <div id="load-card-content" style="padding: 0 1.5rem 1.5rem 1.5rem; display: block; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+                <form action="/load" method="POST">
+                    <label for="load_node_select">Select Node:</label>
+                    <select id="load_node_select" name="node_id" onchange="updateLoadModelsList(this.value)">
+                        {% for n in nodes %}
+                            <option value="{{ n.id }}" {% if not n.is_active %}disabled{% endif %}>
+                                Node {{ n.id }}: {{ n.host }} {% if n.is_local %}(Local){% endif %}
+                                {% if not n.is_active %}(Offline){% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
 
-                <label for="model_file">Select a downloaded model:</label>
-                <select id="model_file" name="model_file">
-                    {% for model in models %}
-                        <option value="{{ model }}">{{ model }}</option>
-                    {% else %}
-                        <option value="" disabled>No models found in 'models' folder</option>
-                    {% endfor %}
-                </select>
+                    <label for="model_file">Select a downloaded model:</label>
+                    <select id="model_file" name="model_file">
+                        {% for model in models %}
+                            <option value="{{ model }}">{{ model }}</option>
+                        {% else %}
+                            <option value="" disabled>No models found in 'models' folder</option>
+                        {% endfor %}
+                    </select>
 
-                <label for="model_alias">Model Alias (Optional):</label>
-                <input type="text" id="model_alias" name="model_alias" placeholder="e.g., custom-model-alias">
+                    <label for="model_alias">Model Alias (Optional):</label>
+                    <input type="text" id="model_alias" name="model_alias" placeholder="e.g., custom-model-alias">
 
-                <div id="vram-info" style="background: var(--container-bg); padding: 10px; border-radius: 4px; margin-bottom: 1rem; border: 1px solid var(--border-color); display: none;">
-                    <div style="display: flex; gap: 20px;">
-                        <div><strong>Training Context:</strong> <span id="info-train-ctx">Loading...</span></div>
-                        <div><strong>Est. VRAM (16k ctx):</strong> <span id="info-vram-16k">Loading...</span></div>
+                    <div id="vram-info" style="background: var(--container-bg); padding: 10px; border-radius: 4px; margin-bottom: 1rem; border: 1px solid var(--border-color); display: none;">
+                        <div style="display: flex; gap: 20px;">
+                            <div><strong>Training Context:</strong> <span id="info-train-ctx">Loading...</span></div>
+                            <div><strong>Est. VRAM (16k ctx):</strong> <span id="info-vram-16k">Loading...</span></div>
+                        </div>
                     </div>
-                </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
-                    <label for="custom_args" style="margin-bottom: 0;">Custom llama-server arguments:</label>
-                    <button type="button" id="showHelpBtn" class="button-small" style="background-color: #7f8c8d; border: none;">Show Help</button>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
+                        <label for="custom_args" style="margin-bottom: 0;">Custom llama-server arguments:</label>
+                        <button type="button" id="showHelpBtn" class="button-small" style="background-color: #7f8c8d; border: none;">Show Help</button>
+                    </div>
+                    <input type="text" id="custom_args" name="custom_args" placeholder="e.g., --temp 0.7 --top-k 40">
+                    <button type="submit">Load Model</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card" style="padding: 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem; cursor: pointer; user-select: none;" onclick="toggleNodesCard()">
+                <h2 style="margin: 0;">3. Available Nodes & Devices</h2>
+                <span id="nodes-toggle-icon" style="font-size: 1.25rem; transition: transform 0.3s; color: var(--text-muted); display: inline-block;">▼</span>
+            </div>
+            <div id="nodes-card-content" style="padding: 0 1.5rem 1.5rem 1.5rem; display: block; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 10px;">
+                    <span style="color: var(--text-muted); font-size: 0.9rem;">Compute devices and memory status on configured cluster nodes</span>
+                    <button type="button" id="refresh-devices-btn" onclick="refreshNodesDevices()" class="button-small button-secondary" style="border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 6px; font-weight: 500;">
+                        <span id="refresh-devices-spinner" style="display: inline-block; transition: transform 0.5s;">🔄</span> Refresh Memory
+                    </button>
                 </div>
-                <input type="text" id="custom_args" name="custom_args" placeholder="e.g., --temp 0.7 --top-k 40">
-                <button type="submit">Load Model</button>
-            </form>
+                <div id="nodes-devices-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <p style="text-align: center; color: var(--text-muted); margin: 0; padding: 1rem 0;">Loading compute devices...</p>
+                </div>
+            </div>
         </div>
 
     </div>
@@ -304,19 +328,174 @@
             }
         }
 
+        function toggleLoadCard() {
+            const content = document.getElementById('load-card-content');
+            const icon = document.getElementById('load-toggle-icon');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                icon.style.transform = 'rotate(0deg)';
+                localStorage.setItem('loadCardCollapsed', 'false');
+            } else {
+                content.style.display = 'none';
+                icon.style.transform = 'rotate(-90deg)';
+                localStorage.setItem('loadCardCollapsed', 'true');
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function toggleNodesCard() {
+            const content = document.getElementById('nodes-card-content');
+            const icon = document.getElementById('nodes-toggle-icon');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                icon.style.transform = 'rotate(0deg)';
+                localStorage.setItem('nodesCardCollapsed', 'false');
+            } else {
+                content.style.display = 'none';
+                icon.style.transform = 'rotate(-90deg)';
+                localStorage.setItem('nodesCardCollapsed', 'true');
+            }
+        }
+
+        function refreshNodesDevices() {
+            const container = document.getElementById('nodes-devices-list');
+            const spinner = document.getElementById('refresh-devices-spinner');
+            const btn = document.getElementById('refresh-devices-btn');
+            
+            if (spinner) spinner.style.transform = 'rotate(360deg)';
+            if (btn) btn.disabled = true;
+
+            fetch('/api/nodes_devices')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to fetch node devices');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!container) return;
+                    container.innerHTML = '';
+                    
+                    if (!data.nodes || data.nodes.length === 0) {
+                        container.innerHTML = '<p style="text-align: center; color: var(--text-muted); margin: 0; padding: 1rem 0;">No nodes configured.</p>';
+                        return;
+                    }
+
+                    data.nodes.forEach(node => {
+                        const nodeCard = document.createElement('div');
+                        nodeCard.style.cssText = 'border: 1px solid var(--border-color); border-radius: 8px; background: var(--container-bg); overflow: hidden;';
+
+                        const statusBadge = node.is_active 
+                            ? '<span style="background-color: var(--flash-success-bg); color: var(--flash-success-text); border: 1px solid var(--flash-success-border); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;">Active</span>'
+                            : '<span style="background-color: var(--flash-error-bg); color: var(--flash-error-text); border: 1px solid var(--flash-error-border); padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;">Offline</span>';
+
+                        const nodeHeaderHtml = `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--card-bg); border-bottom: 1px solid var(--border-color);">
+                                <div style="font-weight: 600; font-size: 0.95rem;">
+                                    Node ${node.id}: ${escapeHtml(node.host)} ${node.is_local ? '<span style="color: var(--text-muted); font-size: 0.85rem; font-weight: normal;">(Local)</span>' : ''}
+                                </div>
+                                <div>${statusBadge}</div>
+                            </div>
+                        `;
+
+                        let devicesHtml = '';
+                        if (!node.is_active) {
+                            devicesHtml = `<div style="padding: 12px 14px; color: var(--flash-error-text); font-size: 0.85rem;">${escapeHtml(node.status_msg || 'Node is offline')}</div>`;
+                        } else if (!node.devices || node.devices.length === 0) {
+                            devicesHtml = '<div style="padding: 12px 14px; color: var(--text-muted); font-size: 0.85rem;">No compute devices found for this node.</div>';
+                        } else {
+                            const rows = node.devices.map(dev => `
+                                <tr style="border-bottom: 1px dashed var(--border-color);">
+                                    <td style="padding: 8px 10px;"><code style="background: var(--card-bg); border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; color: var(--primary-color);">${escapeHtml(dev.device_id)}</code></td>
+                                    <td style="padding: 8px 10px; font-weight: 500;">${escapeHtml(dev.device_name)}</td>
+                                    <td style="padding: 8px 10px; color: var(--text-muted); font-family: monospace; font-size: 0.85rem;">${escapeHtml(dev.memory_info)}</td>
+                                </tr>
+                            `).join('');
+
+                            devicesHtml = `
+                                <div style="overflow-x: auto; padding: 6px 10px;">
+                                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
+                                        <thead>
+                                            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted);">
+                                                <th style="padding: 8px 10px; font-weight: 600;">Device ID</th>
+                                                <th style="padding: 8px 10px; font-weight: 600;">Device Name</th>
+                                                <th style="padding: 8px 10px; font-weight: 600;">Memory Usage</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${rows}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            `;
+                        }
+
+                        nodeCard.innerHTML = nodeHeaderHtml + devicesHtml;
+                        container.appendChild(nodeCard);
+                    });
+                })
+                .catch(err => {
+                    console.error('Error loading node devices:', err);
+                    if (container) {
+                        container.innerHTML = '<p style="text-align: center; color: var(--flash-error-text); margin: 0; padding: 1rem 0;">Failed to load device information.</p>';
+                    }
+                })
+                .finally(() => {
+                    if (spinner) spinner.style.transform = 'rotate(0deg)';
+                    if (btn) btn.disabled = false;
+                });
+        }
+
         document.addEventListener("DOMContentLoaded", function() {
-            const content = document.getElementById('download-card-content');
-            const icon = document.getElementById('download-toggle-icon');
-            if (content && icon) {
+            const downloadContent = document.getElementById('download-card-content');
+            const downloadIcon = document.getElementById('download-toggle-icon');
+            if (downloadContent && downloadIcon) {
                 const isCollapsed = localStorage.getItem('downloadCardCollapsed') === 'true';
                 if (isCollapsed) {
-                    content.style.display = 'none';
-                    icon.style.transform = 'rotate(-90deg)';
+                    downloadContent.style.display = 'none';
+                    downloadIcon.style.transform = 'rotate(-90deg)';
                 } else {
-                    content.style.display = 'block';
-                    icon.style.transform = 'rotate(0deg)';
+                    downloadContent.style.display = 'block';
+                    downloadIcon.style.transform = 'rotate(0deg)';
                 }
             }
+
+            const loadContent = document.getElementById('load-card-content');
+            const loadIcon = document.getElementById('load-toggle-icon');
+            if (loadContent && loadIcon) {
+                const isCollapsed = localStorage.getItem('loadCardCollapsed') === 'true';
+                if (isCollapsed) {
+                    loadContent.style.display = 'none';
+                    loadIcon.style.transform = 'rotate(-90deg)';
+                } else {
+                    loadContent.style.display = 'block';
+                    loadIcon.style.transform = 'rotate(0deg)';
+                }
+            }
+
+            const nodesContent = document.getElementById('nodes-card-content');
+            const nodesIcon = document.getElementById('nodes-toggle-icon');
+            if (nodesContent && nodesIcon) {
+                const isCollapsed = localStorage.getItem('nodesCardCollapsed') === 'true';
+                if (isCollapsed) {
+                    nodesContent.style.display = 'none';
+                    nodesIcon.style.transform = 'rotate(-90deg)';
+                } else {
+                    nodesContent.style.display = 'block';
+                    nodesIcon.style.transform = 'rotate(0deg)';
+                }
+            }
+
+            refreshNodesDevices();
         });
 
         // Get the modals
