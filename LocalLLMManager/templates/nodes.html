@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Cluster Nodes - Local LLM Manager</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <style>
+        .node-card {
+            background: var(--container-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px var(--shadow-color);
+            overflow: hidden;
+        }
+        .node-header {
+            background: var(--card-bg);
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .node-title-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .node-name {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-color);
+        }
+        .node-details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-color);
+        }
+        .node-detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .node-detail-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+        .node-detail-val {
+            font-size: 0.9rem;
+            font-weight: 500;
+            font-family: monospace;
+            word-break: break-all;
+            color: var(--text-color);
+        }
+        .device-table-container {
+            padding: 1rem 1.5rem;
+        }
+        .test-result-box {
+            display: none;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        .test-result-success {
+            background: var(--flash-success-bg);
+            color: var(--flash-success-text);
+            border: 1px solid var(--flash-success-border);
+        }
+        .test-result-error {
+            background: var(--flash-error-bg);
+            color: var(--flash-error-text);
+            border: 1px solid var(--flash-error-border);
+        }
+    </style>
+</head>
+<body>
+    <button id="theme-toggle" class="theme-toggle-btn" aria-label="Toggle Theme">
+        <span class="theme-toggle-icon">🌙</span>
+    </button>
+
+    <div class="container container-wide">
+        <a href="/" class="nav-link">&laquo; Back to Model Manager</a>
+        <a href="/manage" class="nav-link">Manage Models &raquo;</a>
+        <a href="/status" class="nav-link">Status &raquo;</a>
+
+        <h1>Manage Cluster Nodes</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 10px;">
+            <h2 style="margin: 0;">Configured Nodes & Compute Devices</h2>
+            <button type="button" onclick="refreshAllNodeDevices()" class="button-small button-secondary" style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; cursor: pointer; border: none; border-radius: 6px; font-weight: 500;">
+                <span id="nodes-refresh-spinner" style="display: inline-block;">🔄</span> Refresh Devices
+            </button>
+        </div>
+
+        <div id="nodes-container">
+            {% for node in nodes %}
+            <div class="node-card" id="node-card-{{ node.id }}">
+                <div class="node-header">
+                    <div class="node-title-group">
+                        <h3 class="node-name">Node {{ node.id }}: {{ node.host }}</h3>
+                        {% if node.is_local %}
+                            <span class="tag" style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--primary-color);">Local</span>
+                        {% else %}
+                            <span class="tag" style="background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-muted);">Remote</span>
+                        {% endif %}
+
+                        {% if node.is_active %}
+                            <span class="tag" style="background: var(--flash-success-bg); color: var(--flash-success-text); border: 1px solid var(--flash-success-border);">Active</span>
+                        {% else %}
+                            <span class="tag" style="background: var(--flash-error-bg); color: var(--flash-error-text); border: 1px solid var(--flash-error-border);">Offline</span>
+                        {% endif %}
+                    </div>
+
+                    {% if not node.is_local %}
+                    <form action="/nodes/remove" method="POST" style="margin: 0;" onsubmit="return confirm('Are you sure you want to remove Node {{ node.id }} ({{ node.host }})?');">
+                        <input type="hidden" name="node_id" value="{{ node.id }}">
+                        <button type="submit" class="button-small button-delete" style="border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer;">Remove Node</button>
+                    </form>
+                    {% endif %}
+                </div>
+
+                <div class="node-details-grid">
+                    <div class="node-detail-item">
+                        <span class="node-detail-label">Hostname</span>
+                        <span class="node-detail-val">{{ node.host }}</span>
+                    </div>
+                    <div class="node-detail-item">
+                        <span class="node-detail-label">Username</span>
+                        <span class="node-detail-val">{{ node.username if node.username else 'N/A (Local)' }}</span>
+                    </div>
+                    <div class="node-detail-item">
+                        <span class="node-detail-label">SSH Keyfile</span>
+                        <span class="node-detail-val">{{ node.keyfile if node.keyfile else 'N/A (Local)' }}</span>
+                    </div>
+                    <div class="node-detail-item">
+                        <span class="node-detail-label">Model Directory</span>
+                        <span class="node-detail-val">{{ node.model_dir }}</span>
+                    </div>
+                    <div class="node-detail-item">
+                        <span class="node-detail-label">Llama Bin Path</span>
+                        <span class="node-detail-val">{{ node.llama_bin_path if node.llama_bin_path else '(Default PATH)' }}</span>
+                    </div>
+                </div>
+
+                <div class="device-table-container">
+                    <h4 style="margin: 0 0 10px 0; font-size: 0.95rem; font-weight: 600; color: var(--text-color);">Compute & Acceleration Devices</h4>
+                    <div id="node-devices-body-{{ node.id }}">
+                        <p style="color: var(--text-muted); font-size: 0.85rem; margin: 0;">Loading device memory information...</p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="card" style="margin-top: 2rem;">
+            <h2>Add New Remote Node</h2>
+            <p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">
+                Configure a new remote server to execute llama-server or download models across your cluster.
+            </p>
+
+            <div id="test-result-box" class="test-result-box"></div>
+
+            <form id="add-node-form" action="/nodes/add" method="POST">
+                <label for="host">1. Hostname / IP Address:</label>
+                <input type="text" id="host" name="host" placeholder="e.g., 192.168.1.100 or node2.local" required>
+
+                <label for="username">2. SSH Username:</label>
+                <input type="text" id="username" name="username" placeholder="e.g., rye or ubuntu" required>
+
+                <label for="keyfile">3. SSH Private Key File Path:</label>
+                <input type="text" id="keyfile" name="keyfile" placeholder="e.g., /home/rye/.ssh/id_rsa" required>
+
+                <label for="model_dir">4. Remote Model Directory:</label>
+                <input type="text" id="model_dir" name="model_dir" placeholder="e.g., /home/rye/LocalLLMManager/models" required>
+
+                <label for="llama_bin_path">5. Remote llama-server Bin Path:</label>
+                <input type="text" id="llama_bin_path" name="llama_bin_path" placeholder="e.g., /home/rye/llama-cpp/bin" required>
+
+                <div style="display: flex; gap: 12px; margin-top: 1rem;">
+                    <button type="button" id="btn-test-conn" onclick="testNodeConnection()" class="button-secondary" style="flex: 1; padding: 12px;">Test Connection (First 3 Fields)</button>
+                    <button type="submit" id="btn-add-node" style="flex: 1; padding: 12px;">Add Node</button>
+                </div>
+            </form>
+        </div>
+
+    </div>
+
+    <script>
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function testNodeConnection() {
+            const host = document.getElementById('host').value.trim();
+            const username = document.getElementById('username').value.trim();
+            const keyfile = document.getElementById('keyfile').value.trim();
+
+            const resultBox = document.getElementById('test-result-box');
+            const testBtn = document.getElementById('btn-test-conn');
+
+            if (!host || !username || !keyfile) {
+                resultBox.className = 'test-result-box test-result-error';
+                resultBox.style.display = 'block';
+                resultBox.textContent = 'Please fill out Hostname, Username, and SSH Keyfile to test connection.';
+                return;
+            }
+
+            testBtn.disabled = true;
+            testBtn.textContent = 'Testing Connection...';
+            resultBox.style.display = 'none';
+
+            fetch('/api/nodes/test_connection', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ host, username, keyfile })
+            })
+            .then(res => res.json())
+            .then(data => {
+                resultBox.style.display = 'block';
+                if (data.success) {
+                    resultBox.className = 'test-result-box test-result-success';
+                    resultBox.textContent = '✅ ' + data.message;
+                } else {
+                    resultBox.className = 'test-result-box test-result-error';
+                    resultBox.textContent = '❌ ' + (data.error || 'Connection failed.');
+                }
+            })
+            .catch(err => {
+                resultBox.style.display = 'block';
+                resultBox.className = 'test-result-box test-result-error';
+                resultBox.textContent = '❌ Error testing connection: ' + err;
+            })
+            .finally(() => {
+                testBtn.disabled = false;
+                testBtn.textContent = 'Test Connection (First 3 Fields)';
+            });
+        }
+
+        function refreshAllNodeDevices() {
+            const spinner = document.getElementById('nodes-refresh-spinner');
+            if (spinner) spinner.style.transform = 'rotate(360deg)';
+
+            fetch('/api/nodes_devices')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.nodes) return;
+                    data.nodes.forEach(node => {
+                        const body = document.getElementById(`node-devices-body-${node.id}`);
+                        if (!body) return;
+
+                        if (!node.is_active) {
+                            body.innerHTML = `<div style="color: var(--flash-error-text); font-size: 0.85rem;">${escapeHtml(node.status_msg || 'Node is offline')}</div>`;
+                        } else if (!node.devices || node.devices.length === 0) {
+                            body.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem;">No compute devices found for this node.</div>';
+                        } else {
+                            const rows = node.devices.map(dev => `
+                                <tr style="border-bottom: 1px dashed var(--border-color);">
+                                    <td style="padding: 8px 10px;"><code style="background: var(--card-bg); border: 1px solid var(--border-color); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; color: var(--primary-color);">${escapeHtml(dev.device_id)}</code></td>
+                                    <td style="padding: 8px 10px; font-weight: 500;">${escapeHtml(dev.device_name)}</td>
+                                    <td style="padding: 8px 10px; color: var(--text-muted); font-family: monospace; font-size: 0.85rem;">${escapeHtml(dev.memory_info)}</td>
+                                </tr>
+                            `).join('');
+
+                            body.innerHTML = `
+                                <div style="overflow-x: auto;">
+                                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; text-align: left;">
+                                        <thead>
+                                            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-muted);">
+                                                <th style="padding: 8px 10px; font-weight: 600;">Device ID</th>
+                                                <th style="padding: 8px 10px; font-weight: 600;">Device Name</th>
+                                                <th style="padding: 8px 10px; font-weight: 600;">Memory Usage</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${rows}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            `;
+                        }
+                    });
+                })
+                .catch(err => {
+                    console.error('Error refreshing node devices:', err);
+                })
+                .finally(() => {
+                    if (spinner) spinner.style.transform = 'rotate(0deg)';
+                });
+        }
+
+        document.addEventListener('DOMContentLoaded', refreshAllNodeDevices);
+    </script>
+</body>
+</html>
